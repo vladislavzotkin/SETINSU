@@ -1,104 +1,110 @@
-import java.io.*;              
-import java.net.*;             
+import java.io.*;      
+import java.net.*;    
 import java.util.Collections;  
 import java.util.HashMap;      
-import java.util.Map;           
+import java.util.Map;         
 import java.util.Scanner;     
+
 
 public class RouterServer {
 
     private static String ROUTER_MAC = "AA:BB:CC:DD:EE:FF";
     private static String ROUTER_IP = "192.168.1.1";
 
-    /**
-     * Мак и сокет таблица
-     */
     private static final Map<String, Socket> tableCAM = Collections.synchronizedMap(new HashMap<>());
 
-    private static final byte DHCP_DISCOVER = 5;   // Запрос клиента на поиск сервера
-    private static final byte DHCP_OFFER = 6;      // Ответ сервера с предложением ip
-    private static final byte DHCP_REQUEST = 7;    // Запрос на конкретный ip
-    private static final byte DHCP_ACK = 8;        // Подтверждение выдачи
-    private static final byte ERROR = 9;
-    private static final byte DHCP_AVAILABLE_IPS = 10; // Список доступных адресов
 
+    private static final byte DHCP_DISCOVER = 5;
+    private static final byte DHCP_OFFER = 6;
+    private static final byte DHCP_REQUEST = 7;
+    private static final byte DHCP_ACK = 8;
+    private static final byte ERROR = 9;
+    private static final byte DHCP_AVAILABLE_IPS = 10;
 
     private static final byte PING = 20;
     private static final byte PONG = 21;
-    private static final byte ARP_REQUEST = 22;    // Запрос на определение MAC по IP
-    private static final byte ARP_RESPONSE = 23;   // Ответ
 
-    // Размеры
+    private static final byte ARP_REQUEST = 22;
+    private static final byte ARP_RESPONSE = 23;
+
+    private static final byte DNS_DISCOVER = 30;
+    private static final byte DNS_ANNOUNCE = 31;
+    private static final byte DNS_REGISTER = 32;
+    private static final byte DNS_RESOLVE = 33;
+    private static final byte DNS_RESPONSE = 34;
+
     private static final int MAC_SIZE = 17;
-    private static final int REQUEST_TYPE_SIZE = 1; // тип запроса
+    private static final int REQUEST_TYPE_SIZE = 1;
     private static final int IP_SIZE = 15;
-    private static final int MAX_DATA_SIZE = 1024;  // размер данных
+    private static final int MAX_DATA_SIZE = 1024;
 
-    private static String dhcpServerAddress;        // Адрес DHCP сервера
-    private static int dhcpServerPort;              // Порт сервера
-
+    /** IP-адрес DHCP-сервера */
+    private static String dhcpServerAddress;
+    /** Порт DHCP-сервера */
+    private static int dhcpServerPort;
 
     public static void main(String[] args) {
         Scanner scanner = new Scanner(System.in);
 
-        // Запрашиваем IP адрес
         System.out.println("Введите IP маршрутизатора (или нажмите Enter для 192.168.1.1):");
         String input = scanner.nextLine();
         if (!input.isEmpty()) {
-            ROUTER_IP = input;
+            ROUTER_IP = input; // Устанавливаем введенный IP-адрес
         }
 
-        // Запрашиваем MAC адрес
+        // Запрашиваем MAC-адрес маршрутизатора 
         System.out.println("Введите MAC маршрутизатора (или нажмите Enter для AA:BB:CC:DD:EE:FF):");
         input = scanner.nextLine();
         if (!input.isEmpty()) {
-            ROUTER_MAC = input;
+            ROUTER_MAC = input; // Устанавливаем введенный MAC-адрес
         }
 
-        // Запрашиваем порт для
+        // Запрашиваем порт маршрутизатора
         System.out.println("Введите порт для маршрутизатора (или нажмите Enter для 8081):");
-        int port = 8081;
+        int port = 8081; // Порт по умолчанию
         input = scanner.nextLine();
         if (!input.isEmpty()) {
             try {
-                port = Integer.parseInt(input);
+                port = Integer.parseInt(input); // Преобразуем строку в число и устанавливаем порт
             } catch (NumberFormatException e) {
+                // Обрабатываем ошибку, если введён некорректный порт
                 System.out.println("Неверный формат порта, используется порт 8081");
             }
         }
 
-        // Запрашиваем адрес DHCP сервера, при пустом вводе используем умолчанию 127.0.0.1
+        // Запрашиваем адрес DHCP-сервера или используем значение по умолчанию
         System.out.println("Введите адрес DHCP-сервера (или нажмите Enter для 127.0.0.1):");
-        dhcpServerAddress = "127.0.0.1";
+        dhcpServerAddress = "127.0.0.1"; // Адрес по умолчанию - локальный хост
         input = scanner.nextLine();
         if (!input.isEmpty()) {
-            dhcpServerAddress = input;
+            dhcpServerAddress = input; // Устанавливаем введенный адрес DHCP-сервера
         }
 
-        // Запрашиваем порт DHCP сервера
+        // Запрашиваем порт DHCP-сервера или используем значение по умолчанию
         System.out.println("Введите порт DHCP-сервера (или нажмите Enter для 8080):");
-        dhcpServerPort = 8080;
+        dhcpServerPort = 8080; // Порт по умолчанию
         input = scanner.nextLine();
         if (!input.isEmpty()) {
             try {
-                dhcpServerPort = Integer.parseInt(input);
+                dhcpServerPort = Integer.parseInt(input); // Преобразуем строку в число и устанавливаем порт
             } catch (NumberFormatException e) {
+              
                 System.out.println("Неверный формат порта DHCP, используется порт 8080");
             }
         }
 
-        // информация о запуске
+        // Выводим информацию о конфигурации маршрутизатора
         System.out.println("Запуск маршрутизатора на порту " + port);
         System.out.println("DHCP-сервер: " + dhcpServerAddress + ":" + dhcpServerPort);
 
-        // Создаем сокет, используя try with resources для автоматического закрытия ресурсов
+        // Создаем сокет и начинаем прослушивать порт
         try (ServerSocket serverSocket = new ServerSocket(port)) {
-            System.out.println("Маршрутизатор запущен и слушает порт " + port);  // Выводим сообщение об успешном запуске
+            System.out.println("Маршрутизатор запущен и слушает порт " + port);
 
-            // Бесконечный цикл для приема новых подключений
+            // Бесконечный цикл приема новых соединений
             while (true) {
-                Socket clientSocket = serverSocket.accept();  // Блокирующий вызов, ожидаем подключения клиента
-                new Thread(new ClientHandler(clientSocket)).start();  // Создаем и запускаем новый поток для обработки клиента
+                Socket clientSocket = serverSocket.accept(); // Блокирующий вызов - ждем подключения клиента
+                new Thread(new ClientHandler(clientSocket)).start(); // Создаем новый поток для обработки клиента
             }
         } catch (IOException e) {
             System.err.println("Ошибка запуска: " + e.getMessage());
@@ -106,101 +112,82 @@ public class RouterServer {
     }
 
     /**
-     * Класс для обработки подключений клиентов.
-     * Каждое подключение обрабатывается в отдельном потоке.
+     * Класс для обработки подключения отдельного клиента в отдельном потоке.
+     * Обрабатывает входящие пакеты и перенаправляет их соответствующим получателям.
      */
     static class ClientHandler implements Runnable {
-        private final Socket clientSocket;  // Сокет для связи с клиентом
-
+        private final Socket clientSocket;
 
         public ClientHandler(Socket clientSocket) {
-            this.clientSocket = clientSocket;  // Сохраняем сокет клиента
+            this.clientSocket = clientSocket;
         }
 
         @Override
         public void run() {
             try {
-                // Получаем порт до получения MAC адреса
-                String remotePort = String.valueOf(clientSocket.getPort());  // Преобразуем номер порта в строку
+                // Получаем информацию о подключении клиента
+                String remotePort = String.valueOf(clientSocket.getPort());
                 System.out.println("Подключение клиента с порта " + remotePort);
 
-                // сохраняем соединение по порту до получения адреса
+                // Сохраняем соединение по порту до получения MAC-адреса
+                // Это временная привязка, пока не получен MAC-адрес устройства
                 synchronized (tableCAM) {
-                    tableCAM.put(remotePort, clientSocket);  // Добавляем клиента по номеру
+                    tableCAM.put(remotePort, clientSocket);
                 }
 
-                InputStream inputStream = clientSocket.getInputStream();  // Получаем входной поток от клиента
-                int bytesRead;  // Переменная для хранения количества прочитанных байт
+                // Получаем поток ввода для чтения данных от клиента
+                InputStream inputStream = clientSocket.getInputStream();
+                int bytesRead;
 
-                // Бесконечный цикл чтения пакетов от клиента
+                // Цикл чтения пакетов от клиента
                 while (true) {
-                    // Читаем MAC адрес назначения
-                    byte[] destMacBuffer = new byte[MAC_SIZE];  // Создаем буфер
-                    bytesRead = inputStream.read(destMacBuffer);  // Читаем байты
-                    if (bytesRead != MAC_SIZE) {  // Проверяем размер
+                    byte[] destMacBuffer = new byte[MAC_SIZE];
+                    bytesRead = inputStream.read(destMacBuffer);
+                    if (bytesRead != MAC_SIZE) {
                         if (bytesRead == -1) break;
                         continue;
                     }
 
-                    // MAC адрес отправителя
                     byte[] srcMacBuffer = new byte[MAC_SIZE];
                     bytesRead = inputStream.read(srcMacBuffer);
                     if (bytesRead != MAC_SIZE) continue;
 
-                    // тип запроса
                     byte[] reqTypeBuffer = new byte[REQUEST_TYPE_SIZE];
                     bytesRead = inputStream.read(reqTypeBuffer);
                     if (bytesRead != REQUEST_TYPE_SIZE) continue;
 
-                    // Читаем IP адрес назначения
                     byte[] destIpBuffer = new byte[IP_SIZE];
                     bytesRead = inputStream.read(destIpBuffer);
                     if (bytesRead != IP_SIZE) continue;
 
-                    // IP адрес отправителя
                     byte[] srcIpBuffer = new byte[IP_SIZE];
                     bytesRead = inputStream.read(srcIpBuffer);
                     if (bytesRead != IP_SIZE) continue;
 
-                    // Читаем длину данных
                     byte[] dataLengthBuffer = new byte[4];
-                    bytesRead = inputStream.read(dataLengthBuffer);  // Читаем байты в буфер
+                    bytesRead = inputStream.read(dataLengthBuffer);
                     if (bytesRead != 4) continue;
 
-                    // Преобразуем байты длины данных в целое число
-                    int dataLength = byteArrayToInt(dataLengthBuffer);  // Преобразуем массив байт в int
-                    if (dataLength > MAX_DATA_SIZE || dataLength < 0) {  // Проверяем, что длина данных в допустимых пределах
-                        dataLength = MAX_DATA_SIZE;  // Если длина превышает максимум, ограничиваем ее
+                    int dataLength = byteArrayToInt(dataLengthBuffer);
+                    if (dataLength > MAX_DATA_SIZE || dataLength < 0) {
+                        dataLength = MAX_DATA_SIZE;
                     }
 
-                    // Читаем сами данные
-                    byte[] dataBuffer = new byte[dataLength];  // Создаем буфер для данных нужной длины
+                    byte[] dataBuffer = new byte[dataLength];
                     bytesRead = inputStream.read(dataBuffer);
                     if (bytesRead != dataLength) continue;
 
-                    // Преобразуем в строки
                     String destinationMAC = new String(destMacBuffer).trim();
                     String sourceMAC = new String(srcMacBuffer).trim();
-                    byte requestType = reqTypeBuffer[0];  // Извлекаем байт типа запроса
+                    byte requestType = reqTypeBuffer[0]; // Используем байт как код типа запроса
                     String destinationIP = new String(destIpBuffer).trim();
                     String sourceIP = new String(srcIpBuffer).trim();
                     String data = new String(dataBuffer).trim();
 
-                    String requestTypeStr;
-                    switch (requestType) {
-                        case DHCP_DISCOVER: requestTypeStr = "DHCP_DISCOVER"; break;  // Запрос на поиск DHCP сервера
-                        case DHCP_OFFER: requestTypeStr = "DHCP_OFFER"; break;        // Предложение IP адреса
-                        case DHCP_REQUEST: requestTypeStr = "DHCP_REQUEST"; break;     // Запрос на конкретный IP
-                        case DHCP_ACK: requestTypeStr = "DHCP_ACK"; break;            // Подтверждение IP
-                        case ERROR: requestTypeStr = "ERROR"; break;
-                        case DHCP_AVAILABLE_IPS: requestTypeStr = "DHCP_AVAILABLE_IPS"; break;  // Список доступных
-                        case PING: requestTypeStr = "PING"; break;
-                        case PONG: requestTypeStr = "PONG"; break;
-                        case ARP_REQUEST: requestTypeStr = "ARP_REQUEST"; break;
-                        case ARP_RESPONSE: requestTypeStr = "ARP_RESPONSE"; break;
-                        default: requestTypeStr = "UNKNOWN(" + requestType + ")";
-                    }
+                    // Получаем строковое представление типа сообщения для логирования
+                    String requestTypeStr = getRequestTypeName(requestType);
 
+                    // Выводим информацию о полученном пакете
                     System.out.println("Получен пакет: MAC получателя=" + destinationMAC +
                             ", MAC отправителя=" + sourceMAC +
                             ", Тип запроса=" + requestTypeStr +
@@ -208,36 +195,40 @@ public class RouterServer {
                             ", IP отправителя=" + sourceIP +
                             ", Данные=" + data);
 
-                    // Обновляем, если MAC адрес отправителя еще не зарегистрирован
+                    // Обновляем таблицу - связываем MAC-адрес с сокетом
                     synchronized (tableCAM) {
-                        // Если еще нет, добавляем его
+                        // Если этого MAC-адреса еще нет в таблице, запоминаем его
                         if (!tableCAM.containsKey(sourceMAC)) {
-                            tableCAM.put(sourceMAC, clientSocket);  // Сохраняем сокет по адресу
+                            tableCAM.put(sourceMAC, clientSocket);
                         }
                     }
 
-                    // Обрабатываем в зависимости от  типа
+                    // Обрабатываем пакет в зависимости от его типа
                     processPacket(requestType, destinationMAC, sourceMAC,
                             destinationIP, sourceIP, data, clientSocket);
                 }
 
             } catch (IOException e) {
+                // Обрабатываем ошибки ввода/вывода, обычно возникают при отключении клиента
                 System.out.println("Клиент отключился: " + e.getMessage());
             } finally {
-                removeFromCam(clientSocket);
+                // Выполняется всегда при выходе из метода
+                removeFromCam(clientSocket); // Удаляем клиента из CAM-таблицы
             }
         }
     }
 
     /**
-     * Обрабатывает в зависимости от его типа.
+     * Обрабатывает пакет в зависимости от его типа.
+     * Перенаправляет DHCP-запросы на DHCP-сервер, остальные пакеты - соответствующим получателям.
+     *
      * @param requestType    Тип запроса
-     * @param destinationMAC MAC адрес получателя
-     * @param sourceMAC      MAC адрес отправителя
-     * @param destinationIP  IP адрес получателя
-     * @param sourceIP       IP адрес отправителя
+     * @param destinationMAC MAC-адрес получателя
+     * @param sourceMAC      MAC-адрес отправителя
+     * @param destinationIP  IP-адрес получателя
+     * @param sourceIP       IP-адрес отправителя
      * @param data           Данные пакета
-     * @param clientSocket   Сокет клиента отправителя
+     * @param clientSocket   Сокет клиента-отправителя
      */
     private static void processPacket(
             byte requestType,
@@ -249,28 +240,28 @@ public class RouterServer {
             Socket clientSocket
     ) {
         switch(requestType) {
-            case DHCP_DISCOVER:         // Если это запрос на поиск DHCP сервера
-            case DHCP_REQUEST:          // Или запрос на получение конкретного IP адреса
-                // Перенаправляем запрос на DHCP сервер
+            case DHCP_DISCOVER:
+            case DHCP_REQUEST:
+                // DHCP-запросы перенаправляем на DHCP-сервер
                 forwardToDHCP(destinationMAC, sourceMAC, requestType, destinationIP, sourceIP, data, clientSocket);
                 break;
-            default:                    // Для всех остальных типов
-                // Остальные пакеты перенаправляем получателю по MAC адресу
+            default:
+                // Остальные пакеты перенаправляем получателю по MAC-адресу
                 forwardPacket(destinationMAC, sourceMAC, requestType, destinationIP, sourceIP, data, clientSocket);
                 break;
         }
     }
 
     /**
-     * Перенаправляет на DHCP сервер и возвращает ответ клиенту.
+     * Перенаправляет DHCP-запросы на DHCP-сервер и возвращает ответ клиенту.
      *
-     * @param destinationMAC MAC адрес получателя
-     * @param sourceMAC      MAC адрес отправителя
+     * @param destinationMAC MAC-адрес получателя
+     * @param sourceMAC      MAC-адрес отправителя
      * @param requestType    Тип запроса
-     * @param destinationIP  IP адрес получателя
-     * @param sourceIP       IP адрес отправителя
+     * @param destinationIP  IP-адрес получателя
+     * @param sourceIP       IP-адрес отправителя
      * @param data           Данные пакета
-     * @param clientSocket   Сокет клиента отправителя
+     * @param clientSocket   Сокет клиента-отправителя
      */
     private static void forwardToDHCP(
             String destinationMAC,
@@ -281,35 +272,25 @@ public class RouterServer {
             String data,
             Socket clientSocket
     ) {
-        try (Socket dhcpSocket = new Socket(dhcpServerAddress, dhcpServerPort)) {  // Создаем сокет для подключения к DHCP серверу
-
-            String requestTypeStr;
-            switch (requestType) {
-                case DHCP_DISCOVER: requestTypeStr = "DHCP_DISCOVER"; break;
-                case DHCP_OFFER: requestTypeStr = "DHCP_OFFER"; break;
-                case DHCP_REQUEST: requestTypeStr = "DHCP_REQUEST"; break;
-                case DHCP_ACK: requestTypeStr = "DHCP_ACK"; break;
-                case ERROR: requestTypeStr = "ERROR"; break;
-                case DHCP_AVAILABLE_IPS: requestTypeStr = "DHCP_AVAILABLE_IPS"; break;
-                default: requestTypeStr = "UNKNOWN(" + requestType + ")";
-            }
+        try (Socket dhcpSocket = new Socket(dhcpServerAddress, dhcpServerPort)) {
+            // Преобразуем тип запроса в строку
+            String requestTypeStr = getRequestTypeName(requestType);
 
             System.out.println("Перенаправление DHCP пакета на сервер " + dhcpServerAddress + ":" + dhcpServerPort);
 
-            // Отправляем пакет DHCP серверу
+            // Отправляем пакет DHCP-серверу
             sendPacket(dhcpSocket, destinationMAC, sourceMAC, requestType, destinationIP, sourceIP, data);
 
-            // Ожидаем ответа от DHCP сервера и перенаправляем клиенту
-            InputStream inputStream = dhcpSocket.getInputStream();  // Получаем входной поток от DHCP сервера
+            // Ожидаем ответа от DHCP-сервера
+            InputStream inputStream = dhcpSocket.getInputStream();
 
-            // Читаем MAC адрес назначения из ответа DHCP сервера
-            byte[] destMacBuffer = new byte[MAC_SIZE];  // Создаем буфер для MAC адреса назначения
+
+            // Читаем заголовок и данные ответа
+            byte[] destMacBuffer = new byte[MAC_SIZE];
             inputStream.read(destMacBuffer);
 
-            // Читаем MAC адрес отправителя
             byte[] srcMacBuffer = new byte[MAC_SIZE];
             inputStream.read(srcMacBuffer);
-
 
             byte[] reqTypeBuffer = new byte[REQUEST_TYPE_SIZE];
             inputStream.read(reqTypeBuffer);
@@ -323,14 +304,10 @@ public class RouterServer {
             byte[] dataLengthBuffer = new byte[4];
             inputStream.read(dataLengthBuffer);
 
-            // Преобразуем байты длины данных в целое число
             int responseDataLength = byteArrayToInt(dataLengthBuffer);
-
-            // Читаем данные из ответа DHCP сервера
-            byte[] responseDataBuffer = new byte[responseDataLength];  // Создаем буфер для данных нужной длины
+            byte[] responseDataBuffer = new byte[responseDataLength];
             inputStream.read(responseDataBuffer);
 
-            // Преобразуем в строки
             String responseDstMAC = new String(destMacBuffer).trim();
             String responseSrcMAC = new String(srcMacBuffer).trim();
             byte responseType = reqTypeBuffer[0];
@@ -338,20 +315,10 @@ public class RouterServer {
             String responseSrcIP = new String(srcIpBuffer).trim();
             String responseData = new String(responseDataBuffer).trim();
 
-            String responseTypeStr;
-            switch (responseType) {
-                case DHCP_DISCOVER: responseTypeStr = "DHCP_DISCOVER"; break;
-                case DHCP_OFFER: responseTypeStr = "DHCP_OFFER"; break;
-                case DHCP_REQUEST: responseTypeStr = "DHCP_REQUEST"; break;
-                case DHCP_ACK: responseTypeStr = "DHCP_ACK"; break;
-                case ERROR: responseTypeStr = "ERROR"; break;
-                case DHCP_AVAILABLE_IPS: responseTypeStr = "DHCP_AVAILABLE_IPS"; break;
-                default: responseTypeStr = "UNKNOWN(" + responseType + ")";
-            }
+            String responseTypeStr = getRequestTypeName(responseType);
 
             System.out.println("Получен ответ от DHCP: " + responseTypeStr + ", пересылаем клиенту " + responseDstMAC);
 
-            // Перенаправляем ответ от DHCP сервера клиенту
             sendPacket(clientSocket, responseDstMAC, responseSrcMAC, responseType,
                     responseDstIP, responseSrcIP, responseData);
 
@@ -361,17 +328,16 @@ public class RouterServer {
     }
 
     /**
-     * Перенаправляет пакет получателю по MAC-адресу.
-     * Если MAC адрес получателя широковещательный (FF:FF:FF:FF:FF:FF),
-     * то пакет отправляется всем клиентам.
+     * Перенаправляет пакет конкретному получателю по его MAC-адресу.
+     * Если MAC-адрес широковещательный, отправляет пакет всем клиентам.
      *
-     * @param destinationMAC MAC адрес получателя
-     * @param sourceMAC      MAC адрес отправителя
+     * @param destinationMAC MAC-адрес получателя
+     * @param sourceMAC      MAC-адрес отправителя
      * @param requestType    Тип запроса
-     * @param destinationIP  IP адрес получателя
-     * @param sourceIP       IP бадрес отправителя
+     * @param destinationIP  IP-адрес получателя
+     * @param sourceIP       IP-адрес отправителя
      * @param data           Данные пакета
-     * @param senderSocket   Сокет клиента отправителя
+     * @param senderSocket   Сокет отправителя
      */
     private static void forwardPacket(
             String destinationMAC,
@@ -382,46 +348,34 @@ public class RouterServer {
             String data,
             Socket senderSocket
     ) {
-        // Если это широковещательный
+        // Проверяем, является ли пакет широковещательным
         if ("FF:FF:FF:FF:FF:FF".equalsIgnoreCase(destinationMAC)) {
-            // Отправляем пакет всем клиентам
+            // Если да, отправляем его всем подключенным клиентам
             broadcastPacket(destinationMAC, sourceMAC, requestType, destinationIP, sourceIP, data, senderSocket);
             return;
         }
 
-        // Если получатель - маршрутизатор
+        // Проверяем, является ли получатель самим маршрутизатором
         if (ROUTER_MAC.equalsIgnoreCase(destinationMAC)) {
-            String requestTypeStr;
-            switch (requestType) {
-                case DHCP_DISCOVER: requestTypeStr = "DHCP_DISCOVER"; break;
-                case DHCP_OFFER: requestTypeStr = "DHCP_OFFER"; break;
-                case DHCP_REQUEST: requestTypeStr = "DHCP_REQUEST"; break;
-                case DHCP_ACK: requestTypeStr = "DHCP_ACK"; break;
-                case ERROR: requestTypeStr = "ERROR"; break;
-                case DHCP_AVAILABLE_IPS: requestTypeStr = "DHCP_AVAILABLE_IPS"; break;
-                case PING: requestTypeStr = "PING"; break;
-                case PONG: requestTypeStr = "PONG"; break;
-                case ARP_REQUEST: requestTypeStr = "ARP_REQUEST"; break;
-                case ARP_RESPONSE: requestTypeStr = "ARP_RESPONSE"; break;
-                default: requestTypeStr = "UNKNOWN(" + requestType + ")";
-            }
+            // Преобразуем тип запроса в строку для логирования
+            String requestTypeStr = getRequestTypeName(requestType);
 
             System.out.println("Получен пакет для маршрутизатора типа " + requestTypeStr);
-            return;  // Завершаем, т.к. пакет адресован самому маршрутизатору
+            return; // Пакет предназначен маршрутизатору, обработка завершена
         }
 
-        // Ищем получателя по MAC в таблице
+        // Ищем получателя по MAC-адресу в таблице
         Socket recipientSocket;
         synchronized (tableCAM) {
-            recipientSocket = tableCAM.get(destinationMAC);  // Получаем сокет получателя по MAC адресу
+            recipientSocket = tableCAM.get(destinationMAC);
         }
 
         // Если получатель найден и его сокет активен
         if (recipientSocket != null && !recipientSocket.isClosed()) {
-            // Отправляем
+            // Перенаправляем пакет получателю
             sendPacket(recipientSocket, destinationMAC, sourceMAC, requestType, destinationIP, sourceIP, data);
         } else {
-            // Если получатель не найден
+            // Получатель не найден, отправляем сообщение об ошибке отправителю
             System.out.println("MAC " + destinationMAC + " не найден в сети.");
             sendPacket(senderSocket, sourceMAC, ROUTER_MAC, ERROR,
                     sourceIP, ROUTER_IP, "Устройство с MAC " + destinationMAC + " не найдено");
@@ -429,15 +383,15 @@ public class RouterServer {
     }
 
     /**
-     * Отправляет пакет всем клиентам, кроме отправителя (широковещательная рассылка).
+     * Отправляет широковещательный пакет всем подключенным клиентам, кроме отправителя.
      *
-     * @param destinationMAC MAC адрес получателя (должен быть FF:FF:FF:FF:FF:FF)
-     * @param sourceMAC      MAC адрес отправителя
+     * @param destinationMAC MAC-адрес получателя
+     * @param sourceMAC      MAC-адрес отправителя
      * @param requestType    Тип запроса
-     * @param destinationIP  IP адрес получателя
-     * @param sourceIP       IP адрес отправителя
+     * @param destinationIP  IP-адрес получателя
+     * @param sourceIP       IP-адрес отправителя
      * @param data           Данные пакета
-     * @param senderSocket   Сокет клиента отправителя
+     * @param senderSocket   Сокет отправителя
      */
     private static void broadcastPacket(
             String destinationMAC,
@@ -448,28 +402,15 @@ public class RouterServer {
             String data,
             Socket senderSocket
     ) {
-
-        String requestTypeStr;
-        switch (requestType) {
-            case DHCP_DISCOVER: requestTypeStr = "DHCP_DISCOVER"; break;
-            case DHCP_OFFER: requestTypeStr = "DHCP_OFFER"; break;
-            case DHCP_REQUEST: requestTypeStr = "DHCP_REQUEST"; break;
-            case DHCP_ACK: requestTypeStr = "DHCP_ACK"; break;
-            case ERROR: requestTypeStr = "ERROR"; break;
-            case DHCP_AVAILABLE_IPS: requestTypeStr = "DHCP_AVAILABLE_IPS"; break;
-            case PING: requestTypeStr = "PING"; break;
-            case PONG: requestTypeStr = "PONG"; break;
-            case ARP_REQUEST: requestTypeStr = "ARP_REQUEST"; break;
-            case ARP_RESPONSE: requestTypeStr = "ARP_RESPONSE"; break;
-            default: requestTypeStr = "UNKNOWN(" + requestType + ")";
-        }
+        // Преобразуем тип запроса в строку
+        String requestTypeStr = getRequestTypeName(requestType);
 
         System.out.println("Широковещательная отправка от " + sourceMAC + " типа " + requestTypeStr);
 
-        // Проходим по всем клиентам
+        // Перебираем все записи в таблице
         synchronized (tableCAM) {
             for (Map.Entry<String, Socket> entry : tableCAM.entrySet()) {
-                Socket sock = entry.getValue();  // Получаем сокет клиента
+                Socket sock = entry.getValue();
                 // Отправляем пакет всем клиентам, кроме отправителя
                 if (sock != senderSocket && !sock.isClosed()) {
                     sendPacket(sock, destinationMAC, sourceMAC, requestType,
@@ -480,38 +421,42 @@ public class RouterServer {
     }
 
     /**
-     * Преобразует массив из 4 байт в целое число
+     * Преобразует массив байтов в целое число .
+     *
+     * @param bytes Массив из 4 байтов
+     * @return Целое число
      */
     private static int byteArrayToInt(byte[] bytes) {
-        // Преобразуем 4 байта в int, учитывая порядок байт
-        return ((bytes[0] & 0xFF) << 24) |  // Первый байт сдвигаем на 24 бита
-                ((bytes[1] & 0xFF) << 16) |  // Второй байт сдвигаем на 16 бит
-                ((bytes[2] & 0xFF) << 8) |   // Третий байт сдвигаем на 8 бит
-                (bytes[3] & 0xFF);           // Четвертый байт (младший байт)
+        return ((bytes[0] & 0xFF) << 24) |   // Сдвигаем первый байт на 24 бита и маскируем
+                ((bytes[1] & 0xFF) << 16) |  // Сдвигаем второй байт на 16 бит и маскируем
+                ((bytes[2] & 0xFF) << 8) |   // Сдвигаем третий байт на 8 бит и маскируем
+                (bytes[3] & 0xFF);           // Маскируем четвертый байт
     }
 
     /**
-     * Преобразует целое число в массив из 4 байт.
+     * Преобразует целое число в массив из 4 байтов.
+     *
+     * @param value Целое число
+     * @return Массив из 4 байтов
      */
     private static byte[] intToByteArray(int value) {
-        // Преобразуем int в массив из 4 байт, учитывая порядок байт
         return new byte[] {
-                (byte)(value >>> 24),        // Извлекаем старший байт (сдвиг на 24 бита вправо)
-                (byte)(value >>> 16),        // Извлекаем второй байт (сдвиг на 16 бит вправо)
-                (byte)(value >>> 8),         // Извлекаем третий байт (сдвиг на 8 бит вправо)
-                (byte)value                  // Извлекаем младший байт
+                (byte)(value >>> 24),  // Старший байт (сдвиг на 24 бита)
+                (byte)(value >>> 16),  // Второй байт (сдвиг на 16 бит)
+                (byte)(value >>> 8),   // Третий байт (сдвиг на 8 бит)
+                (byte)value            // Младший байт
         };
     }
 
     /**
-     * Формирует и отправляет пакет через указанный сокет.
+     * Формирует и отправляет сетевой пакет по сокету.
      *
-     * @param socket         Сокет, через который отправляется пакет
-     * @param destinationMAC MAC адрес получателя
-     * @param sourceMAC      MAC адрес отправителя
+     * @param socket         Сокет для отправки
+     * @param destinationMAC MAC-адрес получателя
+     * @param sourceMAC      MAC-адрес отправителя
      * @param requestType    Тип запроса
-     * @param destinationIP  IP адрес получателя
-     * @param sourceIP       IP адрес отправителя
+     * @param destinationIP  IP-адрес получателя
+     * @param sourceIP       IP-адрес отправителя
      * @param data           Данные пакета
      */
     private static void sendPacket(
@@ -523,23 +468,23 @@ public class RouterServer {
             String sourceIP,
             String data
     ) {
-        // Проверяем, что сокет существует и не закрыт
+        // Проверяем, что сокет существует и открыт
         if (socket == null || socket.isClosed()) return;
 
         try {
-            // Получаем выходной поток сокета
+            // Получаем выходной поток для сокета
             OutputStream outputStream = socket.getOutputStream();
 
             // Форматируем каждое поле до нужного размера
             byte[] destMACBytes = padRight(destinationMAC, MAC_SIZE).getBytes();
             byte[] srcMACBytes = padRight(sourceMAC, MAC_SIZE).getBytes();
             byte[] reqTypeBytes = new byte[REQUEST_TYPE_SIZE];
-            reqTypeBytes[0] = requestType;
+            reqTypeBytes[0] = requestType; // Устанавливаем байт кода
             byte[] destIPBytes = padRight(destinationIP, IP_SIZE).getBytes();
             byte[] srcIPBytes = padRight(sourceIP, IP_SIZE).getBytes();
             byte[] dataBytes = data.getBytes();
 
-            // Ограничиваем размер данных, если он превышает максимально допустимый
+            // Ограничиваем размер данных, если он превышает максимальный
             if (dataBytes.length > MAX_DATA_SIZE) {
                 byte[] truncatedData = new byte[MAX_DATA_SIZE];
                 System.arraycopy(dataBytes, 0, truncatedData, 0, MAX_DATA_SIZE);
@@ -549,7 +494,7 @@ public class RouterServer {
             // Записываем длину данных (4 байта)
             byte[] dataLengthBytes = intToByteArray(dataBytes.length);
 
-            // Записываем все поля в выходной поток
+            // Записываем в выходной поток
             outputStream.write(destMACBytes);
             outputStream.write(srcMACBytes);
             outputStream.write(reqTypeBytes);
@@ -557,56 +502,74 @@ public class RouterServer {
             outputStream.write(srcIPBytes);
             outputStream.write(dataLengthBytes);
             outputStream.write(dataBytes);
-            outputStream.flush();
+            outputStream.flush(); // Сбрасываем буфер
 
-            String requestTypeStr;
-            switch (requestType) {
-                case DHCP_DISCOVER: requestTypeStr = "DHCP_DISCOVER"; break;
-                case DHCP_OFFER: requestTypeStr = "DHCP_OFFER"; break;
-                case DHCP_REQUEST: requestTypeStr = "DHCP_REQUEST"; break;
-                case DHCP_ACK: requestTypeStr = "DHCP_ACK"; break;
-                case ERROR: requestTypeStr = "ERROR"; break;
-                case DHCP_AVAILABLE_IPS: requestTypeStr = "DHCP_AVAILABLE_IPS"; break;
-                case PING: requestTypeStr = "PING"; break;
-                case PONG: requestTypeStr = "PONG"; break;
-                case ARP_REQUEST: requestTypeStr = "ARP_REQUEST"; break;
-                case ARP_RESPONSE: requestTypeStr = "ARP_RESPONSE"; break;
-                default: requestTypeStr = "UNKNOWN(" + requestType + ")";
-            }
+            // Преобразуем тип запроса в строку для логирования
+            String requestTypeStr = getRequestTypeName(requestType);
 
+            // Выводим информацию об отправленном пакете
             System.out.println("Отправлен пакет: " + requestTypeStr + " -> " + destinationMAC +
                     " (IP: " + destinationIP + "), данные: " + data);
 
         } catch (IOException e) {
+            // Обрабатываем ошибки отправки пакета
             System.out.println("Ошибка отправки пакета: " + e.getMessage());
+        }
+    }
+
+
+    private static String getRequestTypeName(byte requestType) {
+        switch (requestType) {
+            case DHCP_DISCOVER: return "DHCP_DISCOVER";
+            case DHCP_OFFER: return "DHCP_OFFER";
+            case DHCP_REQUEST: return "DHCP_REQUEST";
+            case DHCP_ACK: return "DHCP_ACK";
+            case ERROR: return "ERROR";
+            case DHCP_AVAILABLE_IPS: return "DHCP_AVAILABLE_IPS";
+            case PING: return "PING";
+            case PONG: return "PONG";
+            case ARP_REQUEST: return "ARP_REQUEST";
+            case ARP_RESPONSE: return "ARP_RESPONSE";
+            case DNS_DISCOVER: return "DNS_DISCOVER";
+            case DNS_ANNOUNCE: return "DNS_ANNOUNCE";
+            case DNS_REGISTER: return "DNS_REGISTER";
+            case DNS_RESOLVE: return "DNS_RESOLVE";
+            case DNS_RESPONSE: return "DNS_RESPONSE";
+            default: return "UNKNOWN(" + requestType + ")";
         }
     }
 
     /**
      * Дополняет строку пробелами справа до указанной длины.
-     * Если строка длиннее указанной длины, обрезает ее.
+     * Если строка длиннее указанной длины, обрезает её.
+     *
+     * @param s Исходная строка
+     * @param n Требуемая длина
+     * @return Строка дополненная пробелами или обрезанная до указанной длины
      */
     private static String padRight(String s, int n) {
         if (s.length() >= n) {
-            return s.substring(0, n);
+            return s.substring(0, n); // Обрезаем до нужной длины
         }
-        return String.format("%-" + n + "s", s);  // Используем для выравнивания по левому краю
+        return String.format("%-" + n + "s", s); // Дополняем пробелами справа
     }
 
     /**
-     * Удаляет сокет из таблицы при отключении клиента.
+     * Удаляет сокет клиента из таблицы при отключении.
+     *
+     * @param clientSocket Сокет отключившегося клиента
      */
     private static void removeFromCam(Socket clientSocket) {
         synchronized (tableCAM) {
             String removedKey = null;
-            // Ищем ключ  по значению (сокету)
+            // Находим ключ (MAC-адрес) по значению (сокету)
             for (Map.Entry<String, Socket> entry : tableCAM.entrySet()) {
                 if (entry.getValue() == clientSocket) {
-                    removedKey = entry.getKey();  // Запоминаем ключ для удаления
+                    removedKey = entry.getKey();
                     break;
                 }
             }
-            // Если ключ найден, удаляем его из таблицы
+            // Если ключ найден, удаляем запись из таблицы
             if (removedKey != null) {
                 tableCAM.remove(removedKey);
                 System.out.println("Клиент " + removedKey + " отключен.");

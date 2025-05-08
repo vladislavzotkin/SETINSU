@@ -1,23 +1,21 @@
-import java.io.*;              
-import java.net.*;             
-import java.util.Scanner;       
-import java.util.concurrent.CountDownLatch;  
-import java.util.List;        
-import java.util.ArrayList;    
-import java.util.Arrays;        
-import java.util.Collections;  
-import java.util.HashMap;       
-import java.util.Map;          
 
+import java.io.*;          
+import java.net.*;         
+import java.util.Scanner; 
+import java.util.concurrent.CountDownLatch;  
+import java.util.List;    
+import java.util.ArrayList;
+import java.util.Arrays;    
+import java.util.Collections; 
+import java.util.HashMap;  
+import java.util.Map;     
 
 public class Client1 {
-
 
     private static final int MAC_SIZE = 17;
     private static final int REQUEST_TYPE_SIZE = 1;
     private static final int IP_SIZE = 15;
     private static final int MAX_DATA_SIZE = 1024;
-
 
     private static final byte DHCP_DISCOVER = 5;
     private static final byte DHCP_OFFER = 6;
@@ -26,92 +24,105 @@ public class Client1 {
     private static final byte ERROR = 9;
     private static final byte DHCP_AVAILABLE_IPS = 10;
 
+
     private static final byte PING = 20;
     private static final byte PONG = 21;
     private static final byte ARP_REQUEST = 22;
     private static final byte ARP_RESPONSE = 23;
 
-    private static String CLIENT_MAC;              // MAC адрес клиента, задается при запуске
-    private static String CLIENT_IP = "0.0.0.0";   // IP адрес клиента, изначально не назначен
-    private static boolean ipAssigned = false;     // Флаг, указывающий, назначен ли IP-адрес
 
-    private static String ROUTER_ADDRESS;
-    private static int ROUTER_PORT;
-    private static final String ROUTER_MAC = "AA:BB:CC:DD:EE:FF";
+    private static final byte DNS_DISCOVER = 30;
+    private static final byte DNS_ANNOUNCE = 31;
+    private static final byte DNS_REGISTER = 32;
+    private static final byte DNS_RESOLVE = 33;
+    private static final byte DNS_RESPONSE = 34;
 
-    private Socket socket;
-    private OutputStream outputStream;  // Поток для отправки данных
-    private InputStream inputStream;    // Поток для получения данных
+    // HTTP коды сообщений - определяют тип HTTP сообщения
+    private static final byte HTTP_GET = 40;         // Код для запроса HTML-страницы
+    private static final byte HTTP_RESPONSE = 41;    // Код для ответа с HTML-страницей
 
-    // Переменные для хранения состояния DHCP процесса
-    private volatile String dhcpOfferedIP = null;  // IP адрес, предложенный DHCP сервером
-    private volatile List<String> availableIPs = new ArrayList<>();  // Список доступных IP адресов
-    private volatile boolean dhcpAckReceived = false;  // Флаг получения подтверждения DHCP
-    private volatile CountDownLatch dhcpLatch = new CountDownLatch(1);  // Механизм синхронизации потоков для DHCP
+    // Информация о клиенте
+    private static String CLIENT_MAC;                // MAC-адрес клиента
+    private static String CLIENT_IP = "0.0.0.0";     // IP-адрес клиента (изначально нет IP)
+    private static boolean ipAssigned = false;       // Флаг успешного получения IP
 
-    /**
-     * Таблица ARP  для хранения IP и MAC.
-     */
+    // Информация о маршрутизаторе
+    private static String ROUTER_ADDRESS;            // IP-адрес маршрутизатора
+    private static int ROUTER_PORT;                  // Порт маршрутизатора
+    private static final String ROUTER_MAC = "AA:BB:CC:DD:EE:FF"; // MAC-адрес маршрутизатора
+
+    private Socket socket;                           // Сокет для соединения с маршрутизатором
+    private OutputStream outputStream;               // Поток для отправки данных
+    private InputStream inputStream;                 // для получения данных
+
+
+    private volatile String dhcpOfferedIP = null;    // IP, предложенный через DHCP
+    private volatile List<String> availableIPs = new ArrayList<>(); // Список доступных IP
+    private volatile boolean dhcpAckReceived = false;// Флаг получения DHCP ACK
+    private volatile CountDownLatch dhcpLatch = new CountDownLatch(1); // Синхронизатор для DHCP
+
+    // ARP компоненты - таблица соответствия IP-MAC адресов
     private static final Map<String, String> tableARP = Collections.synchronizedMap(new HashMap<>());
+    private volatile String arpResponseMAC = null;   // MAC в ответ на ARP-запрос
 
-    private volatile String arpResponseMAC = null;  // MAC адрес, полученный в ответ на ARP запрос
+    private DNSClient dnsClient;                     // Клиент DNS для разрешения имен
 
-    private int clientNumber;            // Номер клиента
-    private boolean manualIPSelection;   // Флаг для определения способа выбора IP (ручной/автоматический)
+    private int clientNumber;                        // Номер клиента для идентификации
+    private boolean manualIPSelection;               // Флаг для ручного выбора IP
+    private String htmlPage;                         // Содержимое HTML-страницы клиента
 
 
     public static void main(String[] args) {
         Scanner scanner = new Scanner(System.in);
 
-        int clientNumber = 1;  // Номер клиента по умолчанию
+        int clientNumber = 1;
 
-        // Запрашиваем MAC адрес клиента
+
         System.out.println("Введите MAC адрес клиента (или нажмите Enter для AA:BB:CC:DD:EE:0" + clientNumber + "):");
         CLIENT_MAC = scanner.nextLine();
         if (CLIENT_MAC.isEmpty()) {
             CLIENT_MAC = "AA:BB:CC:DD:EE:0" + clientNumber;
         }
 
-        // Запрашиваем адрес коммутатора
-        System.out.println("Введите адрес маршрутизатора (или нажмите Enter для 192.168.1.1):");
+        System.out.println("Введите адрес маршрутизатора (или нажмите Enter для 127.0.0.1):");
         ROUTER_ADDRESS = scanner.nextLine();
         if (ROUTER_ADDRESS.isEmpty()) {
             ROUTER_ADDRESS = "127.0.0.1";
         }
 
-        // Запрашиваем порт
         System.out.println("Введите порт маршрутизатора (или нажмите Enter для 8081):");
         String portInput = scanner.nextLine();
         ROUTER_PORT = portInput.isEmpty() ? 8081 : Integer.parseInt(portInput);
 
-        // Запрашиваем выбор IP (ручной или автоматический)
+
         System.out.println("Хотите вручную выбрать IP-адрес? (true/false):");
-        boolean manualIPSelection = Boolean.parseBoolean(scanner.nextLine());  // Парсим строку в boolean
+        boolean manualIPSelection = Boolean.parseBoolean(scanner.nextLine());
+
 
         Client1 client = new Client1();
-        client.clientNumber = clientNumber;  // Устанавливаем номер клиента
-        client.manualIPSelection = manualIPSelection;  // Устанавливаем флаг ручного выбора IP
-        client.start(scanner);  // Запускаем клиента, передавая ему сканнер для чтения ввода
+        client.clientNumber = clientNumber;
+        client.manualIPSelection = manualIPSelection;
+        client.start(scanner);
     }
-
 
     public void start(Scanner scanner) {
         try {
-            // Подключаемся к маршрутизатору
-            socket = new Socket(ROUTER_ADDRESS, ROUTER_PORT);  // Создаем сокет для подключения к маршрутизатору
-            outputStream = socket.getOutputStream();  // Получаем выходной поток для отправки данных
-            inputStream = socket.getInputStream();  // для получения данных
+            // Подключение к роутеру
+            socket = new Socket(ROUTER_ADDRESS, ROUTER_PORT);  // Создаем сокет с указанным адресом и портом
+            outputStream = socket.getOutputStream();  // Получаем поток для отправки данных
+            inputStream = socket.getInputStream();  // для приема данных
             System.out.println("Клиент " + clientNumber + " подключился к " + ROUTER_ADDRESS + ":" + ROUTER_PORT);
 
             // Запускаем поток для прослушивания входящих сообщений
-            Thread listenThread = new Thread(this::listenForMessages);
-            listenThread.setDaemon(true);  // Устанавливаем поток как демон (завершится при завершении основного потока)
-            listenThread.start();
+            Thread listenThread = new Thread(this::listenForMessages);  // Создаем новый поток с методом прослушивания
+            listenThread.setDaemon(true);  // Устанавливаем как демон (завершится при завершении основного потока)
+            listenThread.start();  // Запускаем
 
-            Thread.sleep(1000);
-            performDhcpProcess(scanner);  // Запускаем процесс получения IP адреса через DHCP
+            // Запускаем процесс получения IP через DHCP
+            Thread.sleep(1000);  // Даем время на подключение (1 секунда)
+            performDhcpProcess(scanner);  // Запускаем процесс DHCP
 
-            // Проверяем, удалось ли получить IP адрес
+            // Проверяем, успешно ли получен IP-адрес
             if (!ipAssigned) {
                 System.out.println("Не удалось получить IP-адрес через DHCP");
                 socket.close();
@@ -120,13 +131,23 @@ public class Client1 {
 
             System.out.println("IP-адрес " + CLIENT_IP + " успешно получен через DHCP");
 
+            // Инициализируем DNS-клиент для работы с доменными именами
+            dnsClient = new DNSClient(CLIENT_MAC, CLIENT_IP, this::sendMessage);  // Создаем DNS-клиент
+            System.out.println("DNS-клиент инициализирован");
+
+            // Создаем HTML-страницу для этого клиента
+            initializeHtmlPage();  // Инициализируем HTML-страницу
+
+            //  меню
             while (true) {
                 System.out.println("\nМеню клиента " + clientNumber + ":");
                 System.out.println("1. Показать информацию о клиенте");
                 System.out.println("2. Обновить IP-адрес (новый DHCP запрос)");
                 System.out.println("3. Отправить сообщение другому клиенту");
                 System.out.println("4. Показать ARP таблицу");
-                System.out.println("5. Выход");
+                System.out.println("5. Управление DNS");
+                System.out.println("6. Получить HTML-страницу по доменному имени");
+                System.out.println("7. Выход");
                 System.out.print("Выберите действие: ");
 
                 String choice = scanner.nextLine();
@@ -140,64 +161,87 @@ public class Client1 {
                     System.out.println("Статус: " + (ipAssigned ? "IP назначен" : "IP не назначен"));
                 }
                 else if (choice.equals("2")) {
-                    // Обновляем IP адрес через новый DHCP запрос
+                    // Перезапускаем процесс DHCP для обновления IP-адреса
                     System.out.println("Запуск нового DHCP запроса...");
-                    // Сбрасываем все переменные, связанные с DHCP
-                    dhcpOfferedIP = null;
-                    availableIPs.clear();
-                    dhcpAckReceived = false;
-                    ipAssigned = false;
-                    CLIENT_IP = "0.0.0.0";
-                    dhcpLatch = new CountDownLatch(1);  // Создаем новый объект для синхронизации
+
+                    dhcpOfferedIP = null;  // Сбрасываем предложенный IP
+                    availableIPs.clear();  // Очищаем список доступных IP
+                    dhcpAckReceived = false;  // Сбрасываем флаг подтверждения
+                    ipAssigned = false;  // Сбрасываем флаг назначения IP
+                    CLIENT_IP = "0.0.0.0";  // Сбрасываем текущий IP
+                    dhcpLatch = new CountDownLatch(1);  // Создаем новый синхронизатор
 
                     // Запускаем процесс получения IP
                     performDhcpProcess(scanner);
                 }
                 else if (choice.equals("3")) {
-                    if (!ipAssigned) {  // Проверяем, есть ли у нас IP адрес
+
+                    if (!ipAssigned) {  // Проверяем, есть ли у нас IP-адрес
                         System.out.println("Сначала необходимо получить IP-адрес");
                         continue;
                     }
 
-                    // Запрашиваем IP адрес получателя
-                    System.out.print("Введите IP адрес назначения: ");
-                    String destinationIP = scanner.nextLine();
+                    // Запрашиваем адрес назначения
+                    System.out.println("Введите IP адрес или доменное имя назначения:");
+                    String destination = scanner.nextLine();  // Считываем ввод пользователя
+                    String destinationIP = destination;  // Изначально предполагаем, что введен IP
 
-                    // Запрашиваем текст сообщения
+                    // Проверяем, является ли это доменным именем
+                    if (!destination.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {  // Если не соответствует формату IP
+                        // Пытаемся разрешить доменное имя в IP
+                        destinationIP = dnsClient.resolveDomain(destination);
+                        if (destinationIP == null) {  // Если не удалось разрешить имя
+                            System.out.println("Не удалось разрешить доменное имя: " + destination);
+                            continue;
+                        }
+                        System.out.println("Доменное имя " + destination + " разрешено в IP: " + destinationIP);
+                    }
+
+
                     System.out.print("Введите сообщение: ");
                     String data = scanner.nextLine();
 
-                    // Получаем MAC адрес через ARP запрос, если он неизвестен
-                    String destinationMAC = getMacAddress(destinationIP);
-                    if (destinationMAC == null) {  // Если MAC адрес не удалось получить
+                    // Получаем MAC адрес через ARP запрос, если нужно
+                    String destinationMAC = getMacAddress(destinationIP);  // Получаем MAC по IP
+                    if (destinationMAC == null) {  // Если не удалось получить MAC
                         System.out.println("ARP не удался. Не получилось узнать MAC для IP: " + destinationIP);
-                        continue;
+                        continue;  // Возвращаемся к началу цикла
                     }
 
-                    // Отправляем с типом PING
+                    // Отправляем сообщение
                     sendMessage(destinationMAC, CLIENT_MAC, PING, destinationIP, CLIENT_IP, data);
                     System.out.println("Сообщение отправлено");
                 }
                 else if (choice.equals("4")) {
-                    // Показываем содержимое ARP таблицы
+                    // Показываем ARP таблицу (соответствие IP-MAC)
                     System.out.println("ARP таблица:");
-                    if (tableARP.isEmpty()) {  // Проверяем, пуста ли таблица
+                    if (tableARP.isEmpty()) {  // Если таблица пуста
                         System.out.println("Таблица пуста");
                     } else {
-                        // Выводим все записи из таблицы
+                        // Выводим все записи в таблице
                         for (Map.Entry<String, String> entry : tableARP.entrySet()) {
                             System.out.println("IP: " + entry.getKey() + " -> MAC: " + entry.getValue());
                         }
                     }
                 }
                 else if (choice.equals("5")) {
+                    // Вызываем меню управления DNS
+                    showDnsMenu(scanner);
+                }
+                else if (choice.equals("6")) {
+                    // Запрашиваем HTML-страницу по доменному имени или IP
+                    System.out.print("Введите доменное имя или IP-адрес: ");
+                    String domain = scanner.nextLine();  // Считываем ввод пользователя
+                    getHtmlPage(domain);  // Получаем HTML-страницу
+                }
+                else if (choice.equals("7")) {
                     // Выход из программы
                     System.out.println("Завершение работы клиента " + clientNumber);
                     socket.close();  // Закрываем сокет
                     break;  // Выходим из цикла
                 }
                 else {
-                    // Неверный ввод
+                    // Неверный выбор
                     System.out.println("Неверный выбор, попробуйте снова");
                 }
             }
@@ -207,21 +251,167 @@ public class Client1 {
     }
 
     /**
-     * Выполняет процесс получения IP адреса через DHCP.
-     * Включает отправку DHCP DISCOVER, получение DHCP OFFER,
-     * выбор IPадреса (автоматически или вручную) и отправку DHCP REQUEST.
+     * Инициализирует HTML-страницу клиента с текущей информацией.
+     * Страница содержит базовую информацию о клиенте, такую как MAC-адрес и IP-адрес.
+     */
+    private void initializeHtmlPage() {
+        // Создаем простую HTML страницу с информацией о клиенте
+        htmlPage = "<!DOCTYPE html>\n" +
+                "<html>\n" +
+                "<head>\n" +
+                "    <title>Клиент " + clientNumber + "</title>\n" +
+                "    <style>\n" +
+                "        body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }\n" +
+                "        h1 { color: #4285f4; }\n" +
+                "        .info { background-color: #f5f5f5; padding: 15px; border-radius: 5px; }\n" +
+                "        .subtitle { color: #666; }\n" +
+                "    </style>\n" +
+                "</head>\n" +
+                "<body>\n" +
+                "    <h1>Информационная страница клиента " + clientNumber + "</h1>\n" +
+                "    <div class=\"info\">\n" +
+                "        <h2>Сетевая информация:</h2>\n" +
+                "        <p><strong>MAC-адрес:</strong> " + CLIENT_MAC + "</p>\n" +
+                "        <p><strong>IP-адрес:</strong> " + CLIENT_IP + "</p>\n" +
+                "        <p class=\"subtitle\">Страница сгенерирована: " + new java.util.Date() + "</p>\n" +
+                "    </div>\n" +
+                "</body>\n" +
+                "</html>";
+    }
+
+    /**
+     * Отображает и обрабатывает меню DNS-клиента.
+     * Позволяет искать DNS-серверы, выбирать их, регистрировать и разрешать доменные имена.
+     *
+     * @param scanner сканер для чтения пользовательского ввода
+     */
+    private void showDnsMenu(Scanner scanner) {
+        // Проверяем, есть ли у нас IP-адрес
+        if (!ipAssigned) {
+            System.out.println("Сначала необходимо получить IP-адрес");
+            return;  // Выходим из метода
+        }
+
+        // Отображаем и обрабатываем меню DNS
+        while (true) {
+            // Выводим меню DNS
+            System.out.println("\nМеню DNS:");
+            System.out.println("1. Поиск DNS-серверов");
+            System.out.println("2. Выбрать DNS-сервер");
+            System.out.println("3. Зарегистрировать доменное имя");
+            System.out.println("4. Найти IP по доменному имени");
+            System.out.println("5. Показать кэш DNS");
+            System.out.println("6. Вернуться в главное меню");
+            System.out.print("Выберите действие: ");
+
+            String choice = scanner.nextLine();  // Считываем выбор пользователя
+
+            // Обрабатываем выбор пользователя
+            if (choice.equals("1")) {
+                // Запускаем поиск DNS-серверов
+                dnsClient.discoverDnsServers();
+            }
+            else if (choice.equals("2")) {
+                // Выбираем DNS-сервер из списка найденных
+                Map<String, String> servers = dnsClient.getDnsServers();  // Получаем список серверов
+                if (servers.isEmpty()) {  // Если список пуст
+                    System.out.println("Нет доступных DNS-серверов. Выполните поиск сначала.");
+                    continue;
+                }
+
+                // Выводим список доступных серверов
+                System.out.println("Доступные DNS-серверы:");
+                int i = 1;
+                String[] serverIPs = new String[servers.size()];  // Массив для хранения IP-адресов
+                for (String ip : servers.keySet()) {
+                    System.out.println(i + ". " + ip + " (" + servers.get(ip) + ")");
+                    serverIPs[i-1] = ip;  // Сохраняем IP в массив
+                    i++;
+                }
+
+                // Запрашиваем выбор пользователя
+                System.out.print("Выберите номер сервера: ");
+                try {
+                    int serverIdx = Integer.parseInt(scanner.nextLine());  // Считываем и преобразуем ввод
+                    if (serverIdx >= 1 && serverIdx <= serverIPs.length) {  // Проверяем валидность выбора
+                        dnsClient.selectDnsServer(serverIPs[serverIdx-1]);  // Выбираем сервер
+                    } else {
+                        System.out.println("Неверный номер");
+                    }
+                } catch (NumberFormatException e) {
+                    System.out.println("Пожалуйста, введите число");
+                }
+            }
+            else if (choice.equals("3")) {
+                // Регистрируем доменное имя
+                System.out.print("Введите доменное имя: ");
+                String domain = scanner.nextLine();  // Считываем имя домена
+
+                // Запрашиваем IP для домена или используем наш IP
+                System.out.print("Введите IP-адрес (или нажмите Enter для " + CLIENT_IP + "): ");
+                String ip = scanner.nextLine();  // Считываем IP
+                if (ip.isEmpty()) {  // Если IP не указан
+                    ip = CLIENT_IP;  // Используем наш IP
+                }
+
+                // Регистрируем домен
+                dnsClient.registerDomain(domain, ip);
+            }
+            else if (choice.equals("4")) {
+                // Разрешаем доменное имя в IP
+                System.out.print("Введите доменное имя: ");
+                String domain = scanner.nextLine();  // Считываем имя домена
+
+                // Разрешаем имя и выводим результат
+                String ip = dnsClient.resolveDomain(domain);
+                if (ip != null) {  // Если удалось разрешить
+                    System.out.println("IP-адрес для " + domain + ": " + ip);
+                } else {
+                    System.out.println("Не удалось разрешить домен " + domain);
+                }
+            }
+            else if (choice.equals("5")) {
+                // Показываем кэш DNS (сохраненные соответствия домен-IP)
+                Map<String, String> cache = dnsClient.getDnsCache();  // Получаем кэш
+                if (cache.isEmpty()) {  // Если кэш пуст
+                    System.out.println("DNS-кэш пуст");
+                } else {
+                    // Выводим все записи в кэше
+                    System.out.println("DNS-кэш:");
+                    int i = 1;
+                    for (Map.Entry<String, String> entry : cache.entrySet()) {
+                        System.out.println(i++ + ". " + entry.getKey() + " -> " + entry.getValue());
+                    }
+                }
+            }
+            else if (choice.equals("6")) {
+                return;  // Возврат в главное меню
+            }
+            else {
+                System.out.println("Неверный выбор, попробуйте снова");
+            }
+        }
+    }
+
+    /**
+     * Выполняет процесс DHCP для получения IP-адреса от сервера.
+     * Процесс включает отправку DHCP Discover, получение DHCP Offer,
+     * отправку DHCP Request и получение DHCP ACK.
+     *
+     * @param scanner сканер для чтения пользовательского ввода (для ручного выбора IP)
      */
     private void performDhcpProcess(Scanner scanner) {
         try {
-            // Отправляем DHCP Discover для поиска DHCP сервера
+            // Отправляем DHCP Discover для обнаружения DHCP-сервера
             System.out.println("Отправка DHCP Discover...");
-            // Используем широковещательный MAC и IP адрес
+            // Широковещательный запрос для поиска DHCP-сервера
             sendMessage("FF:FF:FF:FF:FF:FF", CLIENT_MAC, DHCP_DISCOVER, "255.255.255.255", "0.0.0.0", "");
 
+            // Даем серверу время на ответ
             Thread.sleep(3000);
 
-            //  Выбираем IP адрес для запроса
-            String requestedIP = null;  // Переменная для хранения выбранного IP
+            //Выбираем IP-адрес из предложенных
+            String requestedIP = null;
 
             if (dhcpOfferedIP != null) {
                 // Если получили предложение IP через DHCP Offer, используем его
@@ -230,53 +420,54 @@ public class Client1 {
             } else if (!availableIPs.isEmpty()) {
                 // Если получили список доступных IP, но не получили DHCP Offer
                 if (manualIPSelection) {
-                    // Режим ручного выбора IP
-                    // Показываем доступные IP-адреса и запрашиваем выбор пользователя
+                    // Если выбран режим ручного выбора IP, показываем доступные IP
                     System.out.println("\nДоступные IP-адреса:");
                     for (int i = 0; i < availableIPs.size(); i++) {
                         System.out.println((i + 1) + ". " + availableIPs.get(i));
                     }
 
-                    // Запрашиваем выбор пользователя, проверяя корректность ввода
+                    // Запрашиваем выбор пользователя
                     int choice = -1;
-                    while (choice < 1 || choice > availableIPs.size()) {
+                    while (choice < 1 || choice > availableIPs.size()) {  // Пока не будет валидный выбор
                         System.out.print("Выберите IP (1-" + availableIPs.size() + "): ");
                         try {
-                            choice = Integer.parseInt(scanner.nextLine());  // Пытаемся преобразовать ввод в число
+                            choice = Integer.parseInt(scanner.nextLine());  // Считываем и преобразуем ввод
                         } catch (NumberFormatException e) {
-                            System.out.println("Пожалуйста, введите число");  // Сообщение об ошибке при неверном формате
+                            System.out.println("Пожалуйста, введите число");
                         }
                     }
 
-                    // Используем выбранный IP из списка (индексация в списке начинается с 0, поэтому choice - 1)
+                    // Используем выбранный IP
                     requestedIP = availableIPs.get(choice - 1);
                     System.out.println("Выбран IP: " + requestedIP);
                 } else {
-                    // Режим автоматического выбора IP (берем первый доступный)
+                    // В автоматическом режиме выбираем первый доступный IP
                     requestedIP = availableIPs.get(0);
                     System.out.println("Автоматически выбран первый доступный IP: " + requestedIP);
                 }
             } else {
                 // Если не получили ни DHCP Offer, ни список доступных IP
                 System.out.println("Не получен ни DHCP Offer, ни список доступных IP, процесс не завершен");
-                return;  // Прерываем процесс
+                return;  // Выходим из метода
             }
 
-            // Отправляем DHCP Request для запроса выбранного IP
+            // Отправляем DHCP Request для запроса конкретного IP
             System.out.println("Отправка DHCP Request для IP: " + requestedIP);
-            // Используем широковещательный MAC и IP адрес
+            // Широковещательный запрос с указанием желаемого IP
             sendMessage("FF:FF:FF:FF:FF:FF", CLIENT_MAC, DHCP_REQUEST, "255.255.255.255", "0.0.0.0", requestedIP);
 
+            // Даем серверу время на ответ
             Thread.sleep(3000);
 
-            // Проверяем результат процесса
-            if (dhcpAckReceived) {
-                // Если получили подтверждение, сохраняем IP и устанавливаем флаг
+            //  Проверяем результат процесса
+            if (dhcpAckReceived) {  // Если получили подтверждение
+                // Устанавливаем полученный IP
                 CLIENT_IP = requestedIP;
-                ipAssigned = true;
+                ipAssigned = true;  // Устанавливаем флаг успешного получения IP
                 System.out.println("DHCP процесс завершен успешно, получен IP: " + CLIENT_IP);
+                // Инициализируем HTML-страницу с новым IP
+                initializeHtmlPage();
             } else {
-                // Если не получили подтверждение
                 System.out.println("Не получен DHCP ACK, процесс не завершен");
             }
 
@@ -286,42 +477,40 @@ public class Client1 {
     }
 
     /**
-     * Получает MAC адрес для указанного IP адреса.
-     * Если MAC адрес есть в ARP таблице, возвращает его напрямую.
-     * Если нет, отправляет ARP запрос и ждет ответа.
+     * Получает MAC-адрес по IP-адресу.
+     * Сначала проверяет в локальной ARP-таблице, если там нет - отправляет ARP-запрос.
      *
+     * @param ip IP-адрес, для которого нужно получить MAC
+     * @return MAC-адрес или null, если не удалось получить
      */
     private String getMacAddress(String ip) {
+        // Проверяем, есть ли IP в нашей ARP-таблице
         if (tableARP.containsKey(ip)) {
-            // Если MAC адрес уже есть в таблице, просто возвращаем его
-            return tableARP.get(ip);
+            return tableARP.get(ip);  // Возвращаем MAC из таблицы
         } else {
-            // Если MAC адреса нет в таблице, отправляем ARP-запрос
-            // Используем широковещательный MAC
+            // Если IP нет в таблице, отправляем ARP-запрос
             sendMessage("FF:FF:FF:FF:FF:FF", CLIENT_MAC, ARP_REQUEST, ip, CLIENT_IP, "");
 
-            // Ждем ответа на ARP запрос
+            // Ждем, пока придёт ARP-ответ
             try {
                 int tries = 0;  // Счетчик попыток
-                // Ждем до 10 попыток с интервалом
-                while (arpResponseMAC == null && tries < 10) {
-                    Thread.sleep(200);  // Пауза между попытками
+                while (arpResponseMAC == null && tries < 10) {  // Пока нет ответа и не превышен лимит попыток
+                    Thread.sleep(200);  // Ждем 200 мс
                     tries++;
                 }
-                if (arpResponseMAC != null) {
-                    // Если получили ответ, сохраняем MAC в таблицу и возвращаем его
-                    String mac = arpResponseMAC;
-                    arpResponseMAC = null;  // Сбрасываем переменную для следующего запроса
-                    tableARP.put(ip, mac);  // Обновляем ARP таблицу
-                    return mac;
+                if (arpResponseMAC != null) {  // Если получили ответ
+                    String mac = arpResponseMAC;  // Сохраняем полученный MAC
+                    arpResponseMAC = null;  // Сбрасываем для следующего запроса
+                    tableARP.put(ip, mac);  // Добавляем в ARP-таблицу
+                    return mac;  // Возвращаем MAC
                 }
             } catch (InterruptedException e) {
-                // Обрабатываем исключение при прерывании потока
                 e.printStackTrace();  // Выводим стек вызовов для отладки
             }
         }
         return null;
     }
+
 
     private static int byteArrayToInt(byte[] bytes) {
         return ((bytes[0] & 0xFF) << 24) |
@@ -339,17 +528,12 @@ public class Client1 {
         };
     }
 
-    /**
-     * Прослушивает входящие сообщения от маршрутизатора.
-     * Этот метод запускается в отдельном потоке и работает непрерывно,
-     * считывая пакеты из входного потока и передавая их на обработку.
-     */
     private void listenForMessages() {
         try {
             while (true) {
-                // Читаем MAC адрес назначения (первое поле пакета)
-                byte[] destMacBuffer = new byte[MAC_SIZE];  // Создаем буфер для MAC адреса назначения
-                int bytesRead = inputStream.read(destMacBuffer);  // Читаем байты в буфер
+
+                byte[] destMacBuffer = new byte[MAC_SIZE];
+                int bytesRead = inputStream.read(destMacBuffer);
                 if (bytesRead != MAC_SIZE) {
                     if (bytesRead == -1) break;
                     continue;
@@ -359,10 +543,10 @@ public class Client1 {
                 bytesRead = inputStream.read(srcMacBuffer);
                 if (bytesRead != MAC_SIZE) continue;
 
-
                 byte[] reqTypeBuffer = new byte[REQUEST_TYPE_SIZE];
                 bytesRead = inputStream.read(reqTypeBuffer);
                 if (bytesRead != REQUEST_TYPE_SIZE) continue;
+
 
                 byte[] destIpBuffer = new byte[IP_SIZE];
                 bytesRead = inputStream.read(destIpBuffer);
@@ -381,11 +565,11 @@ public class Client1 {
                     dataLength = MAX_DATA_SIZE;
                 }
 
-
                 byte[] dataBuffer = new byte[dataLength];
                 bytesRead = inputStream.read(dataBuffer);
                 if (bytesRead != dataLength) continue;
 
+                // Преобразуем все прочитанные байты в строки
                 String destinationMAC = new String(destMacBuffer).trim();
                 String sourceMAC = new String(srcMacBuffer).trim();
                 byte requestType = reqTypeBuffer[0];
@@ -404,155 +588,244 @@ public class Client1 {
 
     /**
      * Обрабатывает входящие пакеты в зависимости от их типа.
-     * Выполняет различные действия для разных типов пакетов: DHCP, PING/PONG, ARP.
+     * Проверяет, предназначен ли пакет для этого клиента, обновляет ARP-таблицу,
+     * и выполняет соответствующие действия для различных типов пакетов.
      *
-     * @param destinationMAC MAC адрес получателя
-     * @param sourceMAC      MAC адрес отправителя
-     * @param requestType    Тип запроса
-     * @param destinationIP  IP адрес получателя
-     * @param sourceIP       IP адрес отправителя
-     * @param data           Данные пакета
+     * @param destinationMAC MAC-адрес назначения
+     * @param sourceMAC MAC-адрес отправителя
+     * @param requestType тип запроса
+     * @param destinationIP IP-адрес назначения
+     * @param sourceIP IP-адрес отправителя
+     * @param data данные пакета
      */
     private void handleIncomingMessage(String destinationMAC, String sourceMAC, byte requestType,
                                        String destinationIP, String sourceIP, String data) {
-        String requestTypeStr;
-        switch (requestType) {
-            case DHCP_DISCOVER: requestTypeStr = "DHCP_DISCOVER"; break;
-            case DHCP_OFFER: requestTypeStr = "DHCP_OFFER"; break;
-            case DHCP_REQUEST: requestTypeStr = "DHCP_REQUEST"; break;
-            case DHCP_ACK: requestTypeStr = "DHCP_ACK"; break;
-            case ERROR: requestTypeStr = "ERROR"; break;
-            case DHCP_AVAILABLE_IPS: requestTypeStr = "DHCP_AVAILABLE_IPS"; break;
-            case PING: requestTypeStr = "PING"; break;
-            case PONG: requestTypeStr = "PONG"; break;
-            case ARP_REQUEST: requestTypeStr = "ARP_REQUEST"; break;
-            case ARP_RESPONSE: requestTypeStr = "ARP_RESPONSE"; break;
-            default: requestTypeStr = "UNKNOWN(" + requestType + ")";
-        }
+        // Получаем строковое представление типа запроса для удобства отладки
+        String requestTypeStr = getRequestTypeName(requestType);
 
+        // Выводим информацию о полученном пакете
         String msg = String.format(
                 "Клиент%d получил пакет -> DestMAC:%s, SrcMAC:%s, Type:%s, DestIP:%s, SrcIP:%s, Data:%s",
                 clientNumber, destinationMAC, sourceMAC, requestTypeStr, destinationIP, sourceIP, data
         );
         System.out.println(msg);
 
-        // Обновляем ARP таблицу, сохраняя MAC адрес отправителя (если это не широковещательный адрес)
+        // Сохраняем MAC адрес источника в ARP таблицу
         if (!sourceMAC.equals("FF:FF:FF:FF:FF:FF") && !sourceIP.equals("0.0.0.0")) {
-            tableARP.put(sourceIP, sourceMAC);  // Добавляем запись в ARP таблицу
+            tableARP.put(sourceIP, sourceMAC);  // Добавляем пару IP-MAC в таблицу
         }
 
-        // Проверяем, что пакет предназначен для нас (по MAC или широковещательный)
+        // Проверяем, предназначен ли пакет для нас
         if (destinationMAC.equals("FF:FF:FF:FF:FF:FF")) {
             // Для широковещательных пакетов проверяем тип
-            // Принимаем только DHCP и ARP запросы, остальные только если они адресованы нам по IP
             if (requestType != DHCP_OFFER && requestType != DHCP_ACK &&
                     requestType != DHCP_AVAILABLE_IPS && requestType != ARP_REQUEST) {
+                // Для остальных типов проверяем IP-назначения
                 if (!destinationIP.equals("255.255.255.255") && !destinationIP.equals(CLIENT_IP) &&
                         !destinationIP.equals("0.0.0.0")) {
                     return;
                 }
             }
         } else if (!destinationMAC.equals(CLIENT_MAC)) {
-            // Если MAC не широковещательный и не наш, игнорируем пакет
+            // Если это не широковещательный и MAC не совпадает с нашим, игнорируем
             return;
         }
 
-        // Обрабатываем пакет в зависимости от его типа
+        // Передаем DNS-сообщения в DNSClient, если он инициализирован
+        if (dnsClient != null && (requestType == DNS_ANNOUNCE || requestType == DNS_RESPONSE)) {
+            dnsClient.handleDnsMessage(requestType, data, sourceMAC, sourceIP);
+        }
+
+        // Обрабатываем различные типы сообщений
         switch (requestType) {
             case DHCP_AVAILABLE_IPS: {
-                // Обработка списка доступных IP адресов
+                // Получен список доступных IP-адресов
                 if (!data.isEmpty()) {
-                    // Разбиваем строку на отдельные IP адреса по запятым
+                    // Парсим строку с IP-адресами, разделенными запятыми
                     String[] ips = data.split(",");
-                    availableIPs = new ArrayList<>(Arrays.asList(ips));  // Сохраняем список IP
+                    availableIPs = new ArrayList<>(Arrays.asList(ips));  // Сохраняем в список
                     System.out.println("Получен список доступных IP-адресов: " + String.join(", ", ips));
                 }
                 break;
             }
             case DHCP_OFFER: {
-                // Обработка предложения IP адреса от DHCP-сервера
-                if (dhcpOfferedIP == null) {  // Проверяем, не получали ли мы уже предложение
+                // Получено предложение IP-адреса от DHCP-сервера
+                if (dhcpOfferedIP == null) {  // Если мы еще не получили предложения
                     dhcpOfferedIP = data;  // Сохраняем предложенный IP
                     System.out.println("Получен DHCP Offer с IP: " + dhcpOfferedIP);
                 }
                 break;
             }
             case DHCP_ACK: {
-                // Обработка подтверждения выделения IP-адреса
-                dhcpAckReceived = true;  // Устанавливаем флаг получения подтверждения
+                // Получено подтверждение выделения IP-адреса
+                dhcpAckReceived = true;  // Устанавливаем флаг получения ACK
                 System.out.println("Получен DHCP ACK для IP: " + data);
                 break;
             }
             case ERROR: {
-                // Обработка сообщения об ошибке
+                // Получено сообщение об ошибке
                 System.out.println("Получена ошибка: " + data);
                 break;
             }
             case PING: {
-                // Обработка запроса PING
-                // Автоматически отвечаем PONG на входящий PING
+                // Получен ping-запрос, отвечаем pong
                 System.out.println("Получен PING от " + sourceIP + ", отправляем PONG...");
                 sendMessage(sourceMAC, CLIENT_MAC, PONG, sourceIP, CLIENT_IP, data);
                 break;
             }
             case PONG: {
-                // Обработка ответа PONG
+                // Получен pong-ответ на наш ping
                 System.out.println("Получен PONG от " + sourceIP + " с сообщением: " + data);
                 break;
             }
             case ARP_REQUEST: {
-                // Обработка запроса ARP (запрос MAC адреса)
-                // Отвечаем только если запрос для нашего IP
-                if (destinationIP.equals(CLIENT_IP)) {
+                // Получен ARP-запрос
+                if (destinationIP.equals(CLIENT_IP)) {  // Если запрос о нашем IP
                     System.out.println("Получен ARP запрос от " + sourceIP + ", отправляем ответ...");
                     sendMessage(sourceMAC, CLIENT_MAC, ARP_RESPONSE, sourceIP, CLIENT_IP, CLIENT_MAC);
                 }
                 break;
             }
             case ARP_RESPONSE: {
-                // Обработка ответа ARP
-                if (destinationMAC.equals(CLIENT_MAC)) {  // Проверяем, что ответ направлен нам
-                    // Извлекаем MAC из данных или используем MAC отправителя, если данные пустые
-                    arpResponseMAC = data.isEmpty() ? sourceMAC : data;
+                // Получен ARP-ответ (я имею этот IP)
+                if (destinationMAC.equals(CLIENT_MAC)) {  // Если ответ предназначен нам
+                    arpResponseMAC = data.isEmpty() ? sourceMAC : data;  // Сохраняем полученный MAC
                     System.out.println("Получен ARP ответ от " + sourceIP + " с MAC: " + arpResponseMAC);
                 }
+                break;
+            }
+            case HTTP_GET: {
+                // Получен запрос на HTML-страницу
+                System.out.println("Получен запрос на HTML-страницу от " + sourceIP);
+                sendMessage(sourceMAC, CLIENT_MAC, HTTP_RESPONSE, sourceIP, CLIENT_IP, htmlPage);
+                break;
+            }
+            case HTTP_RESPONSE: {
+                // Получен ответ с HTML-страницей
+                System.out.println("Получен HTTP ответ от " + sourceIP);
+                System.out.println("Получена HTML-страница:");
+                System.out.println("------- HTML НАЧАЛО -------");
+                System.out.println(data);
+                System.out.println("-------- HTML КОНЕЦ --------");
                 break;
             }
         }
     }
 
     /**
-     * Формирует и отправляет пакет через сокет.
+     * Получает HTML-страницу по доменному имени или IP-адресу.
+     * Если указано доменное имя, сначала разрешает его в IP-адрес.
      *
-     * @param destMAC  MAC-адрес получателя
-     * @param srcMAC   MAC-адрес отправителя
-     * @param reqType  Тип запроса
-     * @param destIP   IP-адрес получателя
-     * @param srcIP    IP-адрес отправителя
-     * @param data     Данные пакета
+     * @param domainOrIp доменное имя или IP-адрес
+     */
+    private void getHtmlPage(String domainOrIp) {
+        // Проверяем, есть ли у нас IP-адрес
+        if (!ipAssigned) {
+            System.out.println("Сначала необходимо получить IP-адрес");
+            return;
+        }
+
+        String destinationIP = domainOrIp;  // Изначально предполагаем, что введен IP
+
+        // Проверяем, является ли введенное значение IP-адресом
+        if (!isValidIpAddress(domainOrIp)) {
+            // Если не IP-адрес, считаем доменным именем и пытаемся разрешить
+            String resolvedIP = dnsClient.resolveDomain(domainOrIp);
+
+            if (resolvedIP == null) {  // Если не удалось разрешить
+                System.out.println("Не удалось разрешить доменное имя: " + domainOrIp);
+                return;
+            }
+
+            // Проверяем, что полученный IP правильного формата
+            if (!isValidIpAddress(resolvedIP)) {
+                System.out.println("Получен некорректный IP-адрес: " + resolvedIP);
+                return;
+            }
+
+            destinationIP = resolvedIP;  // Используем разрешенный IP
+            System.out.println("Доменное имя " + domainOrIp + " разрешено в IP: " + destinationIP);
+        }
+
+        // Получаем MAC адрес через ARP запрос
+        String destinationMAC = getMacAddress(destinationIP);
+        if (destinationMAC == null) {  // Если не удалось получить MAC
+            System.out.println("ARP не удался. Не получилось узнать MAC для IP: " + destinationIP);
+            return;
+        }
+
+        // Отправляем HTTP GET запрос
+        System.out.println("Отправка HTTP GET запроса к " + domainOrIp + " (" + destinationIP + ")");
+        sendMessage(destinationMAC, CLIENT_MAC, HTTP_GET, destinationIP, CLIENT_IP, "");
+    }
+
+    /**
+     * Проверяет, является ли строка корректным IP-адресом.
+     * Валидный IP-адрес состоит из четырех чисел от 0 до 255, разделенных точками.
+     *
+     * @param ip строка для проверки
+     * @return true, если строка является корректным IP-адресом, иначе false
+     */
+    private boolean isValidIpAddress(String ip) {
+        try {
+            // Проверяем наличие IP
+            if (ip == null || ip.isEmpty()) return false;
+
+            // Разбиваем на части по точкам
+            String[] parts = ip.split("\\.");
+            if (parts.length != 4) {  // IP должен состоять из 4 частей
+                return false;
+            }
+
+            // Проверяем каждую часть
+            for (String part : parts) {
+                int value = Integer.parseInt(part);  // Преобразуем в число
+                if (value < 0 || value > 255) {  // Проверяем диапазон
+                    return false;
+                }
+            }
+
+            return true;  // Если все проверки пройдены, IP корректен
+        } catch (NumberFormatException e) {
+            return false;  // Если возникла ошибка при парсинге, IP некорректен
+        }
+    }
+
+    /**
+     * Отправляет сетевое сообщение через маршрутизатор.
+     * Формирует пакет с указанными параметрами и отправляет его через сокет.
+     *
+     * @param destMAC MAC-адрес назначения
+     * @param srcMAC MAC-адрес отправителя
+     * @param reqType тип запроса
+     * @param destIP IP-адрес назначения
+     * @param srcIP IP-адрес отправителя
+     * @param data данные для отправки
      */
     private void sendMessage(String destMAC, String srcMAC, byte reqType,
                              String destIP, String srcIP, String data) {
         try {
-
-            byte[] destMACBytes = padRight(destMAC, MAC_SIZE).getBytes();
-            byte[] srcMACBytes = padRight(srcMAC, MAC_SIZE).getBytes();
+            // Подготавливаем поля пакета
+            // Форматируем каждое поле до нужного размера
+            byte[] destMACBytes = padRight(destMAC, MAC_SIZE).getBytes();  // MAC получателя
+            byte[] srcMACBytes = padRight(srcMAC, MAC_SIZE).getBytes();    // MAC отправителя
             byte[] reqTypeBytes = new byte[REQUEST_TYPE_SIZE];
-            reqTypeBytes[0] = reqType;
-            byte[] destIPBytes = padRight(destIP, IP_SIZE).getBytes();
-            byte[] srcIPBytes = padRight(srcIP, IP_SIZE).getBytes();
-            byte[] dataBytes = data.getBytes();
+            reqTypeBytes[0] = reqType;  // Тип запроса
+            byte[] destIPBytes = padRight(destIP, IP_SIZE).getBytes();     // IP получателя
+            byte[] srcIPBytes = padRight(srcIP, IP_SIZE).getBytes();       // IP отправителя
+            byte[] dataBytes = data.getBytes();  // Данные
 
-
+            // Ограничиваем размер данных максимальным значением
             if (dataBytes.length > MAX_DATA_SIZE) {
-                byte[] truncatedData = new byte[MAX_DATA_SIZE];            // Создаем буфер максимального размера
-                System.arraycopy(dataBytes, 0, truncatedData, 0, MAX_DATA_SIZE);  // Копируем только часть данных
-                dataBytes = truncatedData;                                 // Используем усеченные данные
+                byte[] truncatedData = new byte[MAX_DATA_SIZE];
+                System.arraycopy(dataBytes, 0, truncatedData, 0, MAX_DATA_SIZE);
+                dataBytes = truncatedData;
             }
 
-            // Записываем длину данных
+            // Записываем длину данных (4 байта)
             byte[] dataLengthBytes = intToByteArray(dataBytes.length);
 
+            // Записываем все поля последовательно в поток
             outputStream.write(destMACBytes);
             outputStream.write(srcMACBytes);
             outputStream.write(reqTypeBytes);
@@ -562,41 +835,342 @@ public class Client1 {
             outputStream.write(dataBytes);
             outputStream.flush();
 
-            String requestTypeStr;
-            switch (reqType) {
-                case DHCP_DISCOVER: requestTypeStr = "DHCP_DISCOVER"; break;
-                case DHCP_OFFER: requestTypeStr = "DHCP_OFFER"; break;
-                case DHCP_REQUEST: requestTypeStr = "DHCP_REQUEST"; break;
-                case DHCP_ACK: requestTypeStr = "DHCP_ACK"; break;
-                case ERROR: requestTypeStr = "ERROR"; break;
-                case DHCP_AVAILABLE_IPS: requestTypeStr = "DHCP_AVAILABLE_IPS"; break;
-                case PING: requestTypeStr = "PING"; break;
-                case PONG: requestTypeStr = "PONG"; break;
-                case ARP_REQUEST: requestTypeStr = "ARP_REQUEST"; break;
-                case ARP_RESPONSE: requestTypeStr = "ARP_RESPONSE"; break;
-                default: requestTypeStr = "UNKNOWN(" + reqType + ")";
-            }
 
+            String requestTypeStr = getRequestTypeName(reqType);
             System.out.println("Отправлен пакет: " + requestTypeStr + " -> " + destMAC +
                     " (IP: " + destIP + "), данные: " + data);
 
         } catch (IOException e) {
-            System.out.println("Ошибка отправки сообщения: " + e.getMessage());  // Выводим сообщение об ошибке
+            System.out.println("Ошибка отправки сообщения: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Возвращает строковое представление типа сообщения по его коду.
+     *
+     * @param requestType код типа сообщения
+     * @return строковое представление типа сообщения
+     */
+    private String getRequestTypeName(byte requestType) {
+        // Возвращаем строковое представление в зависимости от кода
+        switch (requestType) {
+            case DHCP_DISCOVER: return "DHCP_DISCOVER";
+            case DHCP_OFFER: return "DHCP_OFFER";
+            case DHCP_REQUEST: return "DHCP_REQUEST";
+            case DHCP_ACK: return "DHCP_ACK";
+            case ERROR: return "ERROR";
+            case DHCP_AVAILABLE_IPS: return "DHCP_AVAILABLE_IPS";
+            case PING: return "PING";
+            case PONG: return "PONG";
+            case ARP_REQUEST: return "ARP_REQUEST";
+            case ARP_RESPONSE: return "ARP_RESPONSE";
+            case DNS_DISCOVER: return "DNS_DISCOVER";
+            case DNS_ANNOUNCE: return "DNS_ANNOUNCE";
+            case DNS_REGISTER: return "DNS_REGISTER";
+            case DNS_RESOLVE: return "DNS_RESOLVE";
+            case DNS_RESPONSE: return "DNS_RESPONSE";
+            case HTTP_GET: return "HTTP_GET";
+            case HTTP_RESPONSE: return "HTTP_RESPONSE";
+            default: return "UNKNOWN(" + requestType + ")";  // Для неизвестных типов
         }
     }
 
     /**
      * Дополняет строку пробелами справа до указанной длины.
-     * Если строка длиннее указанной длины, обрезает ее.
      *
-     * @param s Исходная строка
-     * @param n Требуемая длина
-     * @return Строка нужной длины, дополненная пробелами справа
+     * @param s строка для дополнения
+     * @param n требуемая длина
+     * @return строка, дополненная пробелами справа
      */
     private static String padRight(String s, int n) {
         if (s.length() >= n) {
-            return s.substring(0, n);
+            return s.substring(0, n);  // Обрезаем, если длина больше требуемой
         }
-        return String.format("%-" + n + "s", s);
+        return String.format("%-" + n + "s", s);  // Дополняем пробелами справа
+    }
+
+    /**
+     * Класс для работы с DNS в клиентских приложениях.
+     * Позволяет находить DNS-серверы, регистрировать доменные имена и запрашивать IP по доменному имени.
+     */
+    private class DNSClient {
+        // Известные DNS-серверы (IP  MAC)
+        private final Map<String, String> dnsServers = new HashMap<>();  // Хранит пары IP-MAC найденных DNS-серверов
+
+        // Кэш DNS-записей (домен IP)
+        private final Map<String, String> dnsCache = new HashMap<>();  // Хранит разрешенные доменные имена
+
+        // Поля для хранения информации о клиенте
+        private final String clientMAC;  // MAC-адрес клиента
+        private final String clientIP;   // IP-адрес клиента
+
+        // Выбранный DNS-сервер
+        private String currentDnsServerIP = null;   // IP выбранного DNS-сервера
+        private String currentDnsServerMAC = null;  // MAC выбранного DNS-сервера
+
+        // Для асинхронного получения ответов
+        private volatile String dnsResponseMessage = null;          // Хранит полученный ответ от DNS-сервера
+        private volatile CountDownLatch dnsLatch = new CountDownLatch(1);  // Синхронизатор для ожидания ответа
+
+        // Вспомогательная функция для отправки сообщений
+        private final SendMessageCallback sendMessageCallback;  // Функция для отправки сообщений
+
+        /**
+         * Интерфейс для функции отправки сообщения
+         */
+        public interface SendMessageCallback {
+            void sendMessage(String destMAC, String srcMAC, byte reqType,
+                             String destIP, String srcIP, String data);
+        }
+
+        /**
+         * Создает новый экземпляр DNS-клиента
+         *
+         * @param clientMAC MAC-адрес клиента
+         * @param clientIP IP-адрес клиента
+         * @param sendMessageCallback функция для отправки сообщений через клиентский сокет
+         */
+        public DNSClient(String clientMAC, String clientIP, SendMessageCallback sendMessageCallback) {
+            this.clientMAC = clientMAC;  // Сохраняем MAC-адрес клиента
+            this.clientIP = clientIP;    // Сохраняем IP-адрес клиента
+            this.sendMessageCallback = sendMessageCallback;  // Сохраняем функцию отправки сообщений
+        }
+
+        /**
+         * Обработка входящих DNS-сообщений. Этот метод должен вызываться из обработчика
+         * входящих сообщений клиента при получении DNS-пакетов.
+         *
+         * @param requestType тип сообщения
+         * @param data данные сообщения
+         * @param sourceMAC MAC-адрес отправителя
+         * @param sourceIP IP-адрес отправителя
+         */
+        public void handleDnsMessage(byte requestType, String data, String sourceMAC, String sourceIP) {
+            switch (requestType) {
+                case DNS_ANNOUNCE:
+                    // Обнаружили DNS-сервер
+                    handleDnsAnnounce(sourceMAC, sourceIP, data);
+                    break;
+
+                case DNS_RESPONSE:
+                    // Получили ответ от DNS-сервера
+                    handleDnsResponse(sourceMAC, sourceIP, data);
+                    break;
+            }
+        }
+
+        /**
+         * Обработка объявления DNS-сервера
+         *
+         * @param serverMAC MAC-адрес DNS-сервера
+         * @param serverIP IP-адрес DNS-сервера
+         * @param data данные сообщения
+         */
+        private void handleDnsAnnounce(String serverMAC, String serverIP, String data) {
+            System.out.println("Обнаружен DNS-сервер: " + serverIP + " (" + serverMAC + ")");
+            // Сохраняем информацию о DNS-сервере
+            dnsServers.put(serverIP, serverMAC);  // Добавляем пару IP-MAC в список серверов
+
+            // Если у нас еще нет выбранного DNS-сервера, устанавливаем этот
+            if (currentDnsServerIP == null) {
+                currentDnsServerIP = serverIP;    // Запоминаем IP сервера
+                currentDnsServerMAC = serverMAC;  // Запоминаем MAC сервера
+                System.out.println("Установлен DNS-сервер по умолчанию: " + currentDnsServerIP);
+            }
+        }
+
+        /**
+         * Обработка ответа DNS-сервера
+         *
+         * @param serverMAC MAC-адрес DNS-сервера
+         * @param serverIP IP-адрес DNS-сервера
+         * @param data данные сообщения
+         */
+        private void handleDnsResponse(String serverMAC, String serverIP, String data) {
+            System.out.println("Получен ответ от DNS-сервера: " + data);
+            dnsResponseMessage = data;  // Сохраняем полученное сообщение
+            dnsLatch.countDown();       // Разблокируем ожидающий поток
+
+            // Парсим и сохраняем результат в кэш, если это успешный ответ на RESOLVE
+            if (data.startsWith("DNS RESOLVE OK")) {
+                String[] parts = data.split("\\s+");  // Разделяем сообщение на части по пробелам
+                if (parts.length >= 5) {  // Должно быть не менее 5 частей
+                    String domain = parts[3];  // Четвертый элемент - это домен
+                    String ip = parts[4];      // Пятый элемент - это IP
+                    System.out.println("Добавлен в кэш: " + domain + " -> " + ip);
+                    dnsCache.put(domain, ip);  // Сохраняем домен - IP в кэш
+                }
+            }
+        }
+
+        /**
+         * Поиск DNS-серверов в сети
+         */
+        public void discoverDnsServers() {
+            System.out.println("Поиск DNS-серверов в сети...");
+            // Отправляем широковещательный запрос для обнаружения DNS-серверов
+            sendMessageCallback.sendMessage(
+                    "FF:FF:FF:FF:FF:FF", clientMAC, DNS_DISCOVER,
+                    "255.255.255.255", clientIP, "DNS_DISCOVER"
+            );
+
+            // Даем время на получение ответов
+            try {
+                Thread.sleep(2000);  // Ждем 2 секунды
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
+            // Выводим обнаруженные серверы
+            if (dnsServers.isEmpty()) {
+                System.out.println("DNS-серверы не обнаружены");
+            } else {
+                System.out.println("Обнаружены DNS-серверы:");
+                int i = 1;
+                for (Map.Entry<String, String> entry : dnsServers.entrySet()) {
+                    System.out.println(i++ + ". " + entry.getKey() + " (" + entry.getValue() + ")");
+                }
+            }
+        }
+
+        /**
+         * Выбор DNS-сервера для использования
+         *
+         * @param serverIP IP-адрес DNS-сервера
+         * @return true, если сервер успешно выбран, иначе false
+         */
+        public boolean selectDnsServer(String serverIP) {
+            if (dnsServers.containsKey(serverIP)) {  // Если сервер есть в списке
+                currentDnsServerIP = serverIP;                     // Запоминаем IP
+                currentDnsServerMAC = dnsServers.get(serverIP);    // Запоминаем MAC
+                System.out.println("Выбран DNS-сервер: " + currentDnsServerIP);
+                return true;
+            }
+            return false;  // Если сервера нет в списке
+        }
+
+        /**
+         * Регистрация доменного имени
+         *
+         * @param domain доменное имя
+         * @param ip IP-адрес для этого домена
+         * @return true, если домен успешно зарегистрирован, иначе false
+         */
+        public boolean registerDomain(String domain, String ip) {
+            if (currentDnsServerIP == null) {  // Если не выбран DNS-сервер
+                System.out.println("DNS-сервер не выбран. Запустите discoverDnsServers() сначала.");
+                return false;
+            }
+
+            // Сбрасываем данные предыдущего ответа
+            dnsResponseMessage = null;
+            dnsLatch = new CountDownLatch(1);  // Создаем новый синхронизатор
+
+            // Подготавливаем запрос на регистрацию
+            String registerCommand = "DNS REGISTER " + domain + " " + ip;
+            System.out.println("Отправка запроса на регистрацию: " + registerCommand);
+
+            // Отправляем запрос на регистрацию
+            sendMessageCallback.sendMessage(
+                    currentDnsServerMAC, clientMAC, DNS_REGISTER,
+                    currentDnsServerIP, clientIP, registerCommand
+            );
+
+            // Ждем ответа
+            try {
+                dnsLatch.await();  // Ждем, пока придет ответ
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+                return false;
+            }
+
+            // Проверяем ответ
+            if (dnsResponseMessage != null && dnsResponseMessage.contains("DNS REGISTER OK")) {
+                System.out.println("Домен успешно зарегистрирован: " + domain + " -> " + ip);
+                // Добавляем в локальный кэш
+                dnsCache.put(domain, ip);  // Сохраняем домен -> IP в кэш
+                return true;
+            } else {
+                System.out.println("Ошибка регистрации домена: " +
+                        (dnsResponseMessage != null ? dnsResponseMessage : "нет ответа"));
+                return false;
+            }
+        }
+
+        /**
+         * Поиск IP по доменному имени
+         *
+         * @param domain доменное имя
+         * @return IP-адрес или null, если не удалось разрешить
+         */
+        public String resolveDomain(String domain) {
+            // Сначала проверяем локальный кэш
+            if (dnsCache.containsKey(domain)) {
+                String ip = dnsCache.get(domain);  // Получаем IP из кэша
+                System.out.println("Найдено в кэше: " + domain + " -> " + ip);
+                return ip;
+            }
+
+            if (currentDnsServerIP == null) {  // Если не выбран DNS-сервер
+                System.out.println("DNS-сервер не выбран. Запустите discoverDnsServers() сначала.");
+                return null;
+            }
+
+            // Сбрасываем данные предыдущего ответа
+            dnsResponseMessage = null;
+            dnsLatch = new CountDownLatch(1);  // Создаем новый синхронизатор
+
+            // Подготавливаем запрос на разрешение
+            String resolveCommand = "DNS RESOLVE " + domain;
+            System.out.println("Отправка запроса на разрешение: " + resolveCommand);
+
+            // Отправляем запрос на разрешение
+            sendMessageCallback.sendMessage(
+                    currentDnsServerMAC, clientMAC, DNS_RESOLVE,
+                    currentDnsServerIP, clientIP, resolveCommand
+            );
+
+            // Ждем ответа
+            try {
+                dnsLatch.await();  // Ждем, пока придет ответ
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+                return null;
+            }
+
+            // Проверяем ответ
+            if (dnsResponseMessage != null && dnsResponseMessage.contains("DNS RESOLVE OK")) {
+                String[] parts = dnsResponseMessage.split("\\s+");  // Разделяем сообщение на части
+                if (parts.length >= 5) {  // Должно быть не менее 5 частей
+                    String resolvedDomain = parts[3];  // Получаем домен (индекс 3)
+                    String resolvedIP = parts[4];      // Получаем IP (индекс 4)
+
+                    System.out.println("Домен успешно разрешен: " + domain + " -> " + resolvedIP);
+                    dnsCache.put(domain, resolvedIP);  // Сохраняем в кэш
+                    return resolvedIP;
+                }
+            }
+
+            System.out.println("Домен не найден: " + domain);
+            return null;
+        }
+
+        /**
+         * Получить список известных DNS-серверов
+         *
+         * @return неизменяемая карта IP - MAC DNS-серверов
+         */
+        public Map<String, String> getDnsServers() {
+            return Collections.unmodifiableMap(dnsServers);  // Возвращаем неизменяемую копию карты
+        }
+
+        /**
+         * Получить список записей в кэше
+         *
+         * @return неизменяемая карта доменное имя - IP
+         */
+        public Map<String, String> getDnsCache() {
+            return Collections.unmodifiableMap(dnsCache);  // Возвращаем неизменяемую копию карты
+        }
     }
 }

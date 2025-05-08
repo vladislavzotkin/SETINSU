@@ -1,69 +1,68 @@
 import java.io.*;              
 import java.net.*;              
 import java.util.Collections;   
-import java.util.HashMap;       
+import java.util.HashMap;      
 import java.util.Map;          
-import java.util.Scanner;      
-import java.util.ArrayList;     
-import java.util.List;          
+import java.util.Scanner;       
+import java.util.ArrayList;    
+import java.util.List;         
 
-
+/**
+ * Сервер DHCP для распределения IP-адресов.
+ */
 public class DHCPServer {
-
 
     private static String SERVER_MAC = "AA:BB:22:DD:EE:FF";
     private static String SERVER_IP = "127.0.0.1";
-
-    private static final int IP_POOL_START = 10;   // Начало диапазона
-    private static final int IP_POOL_END = 100;    // Конец диапазона
+    private static final int IP_POOL_START = 10;
+    private static final int IP_POOL_END = 100;
 
     /**
      * Массив для хранения состояния IP-адресов в пуле.
-     * true = IP адрес занят (арендован клиентом)
-     * false = IP адрес свободен (доступен для выдачи)
+     * true = IP-адрес занят (арендован клиентом)
+     * false = IP-адрес свободен (доступен для выдачи)
      *
-     * Индекс массива соответствует последнему октету IP адреса.
+     * Индекс массива соответствует последнему октету IP-адреса.
      * Например, ipPool[15] соответствует адресу 192.168.1.15
      */
     private static final boolean[] ipPool = new boolean[IP_POOL_END + 1];
 
     /**
-     * Таблица аренд IP адресов.
-     * Ключ - MAC адрес клиента, значение - выделенный ему IP адрес.
+     * Таблица аренд IP-адресов.
+     * Ключ - MAC-адрес клиента, значение - выделенный ему IP-адрес.
+     * Синхронизирована для безопасного доступа из разных потоков.
      */
     private static final Map<String, String> dhcpLeases = Collections.synchronizedMap(new HashMap<>());
 
-    private static final byte DHCP_DISCOVER = 5;   // Запрос клиента на поиск DHCP сервера
-    private static final byte DHCP_OFFER = 6;      // Ответ сервера с предложением IP адреса
-    private static final byte DHCP_REQUEST = 7;    // Запрос на конкретный
-    private static final byte DHCP_ACK = 8;        // Подтверждение выдачи
+    private static final byte DHCP_DISCOVER = 5;   // Запрос клиента на поиск DHCP-сервера
+    private static final byte DHCP_OFFER = 6;      // Ответ сервера с предложением IP-адреса
+    private static final byte DHCP_REQUEST = 7;    // Запрос на конкретный IP-адрес
+    private static final byte DHCP_ACK = 8;        // Подтверждение выдачи IP-адреса
     private static final byte ERROR = 9;
-    private static final byte DHCP_AVAILABLE_IPS = 10; // Код для отправки списка доступных
+    private static final byte DHCP_AVAILABLE_IPS = 10; // Код для отправки списка доступных IP-адресов
 
     private static final int MAC_SIZE = 17;
     private static final int REQUEST_TYPE_SIZE = 1;
     private static final int IP_SIZE = 15;
     private static final int MAX_DATA_SIZE = 1024;
 
-
     public static void main(String[] args) {
         Scanner scanner = new Scanner(System.in);
 
-        // Запрашиваем IP адрес DHCP сервера
+
         System.out.println("Введите IP DHCP-сервера (или нажмите Enter для 127.0.0.1):");
         String input = scanner.nextLine();
         if (!input.isEmpty()) {
             SERVER_IP = input;
         }
 
-        // Запрашиваем MAC адрес
+
         System.out.println("Введите MAC DHCP-сервера (или нажмите Enter для AA:BB:22:DD:EE:FF):");
         input = scanner.nextLine();
-        if (!input.isEmpty()) {  // Если строка не пустая, используем введенное значение
+        if (!input.isEmpty()) {
             SERVER_MAC = input;
         }
 
-        // Запрашиваем порт
         System.out.println("Введите порт для DHCP-сервера (или нажмите Enter для 8080):");
         int port = 8080;
         input = scanner.nextLine();
@@ -75,19 +74,20 @@ public class DHCPServer {
             }
         }
 
+        // Выводим информацию о запуске DHCP-сервера
         System.out.println("Запуск DHCP-сервера на порту " + port);
 
-        // Создаем сокет
+        // Создаем серверный сокет, используя конструкцию try-with-resources для автоматического закрытия ресурсов
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             System.out.println("DHCP-сервер запущен и слушает порт " + port);
 
-            // для приема новых подключений
+            // Бесконечный цикл для приема новых подключений
             while (true) {
                 Socket clientSocket = serverSocket.accept();  // Блокирующий вызов, ожидаем подключения клиента
                 new Thread(new ClientHandler(clientSocket)).start();  // Создаем и запускаем новый поток для обработки клиента
             }
-        } catch (IOException e) {
-            System.err.println("Ошибка запуска: " + e.getMessage());
+        } catch (IOException e) {  // Обрабатываем возможные ошибки ввода-вывода
+            System.err.println("Ошибка запуска: " + e.getMessage());  // Выводим сообщение об ошибке в поток ошибок
         }
     }
 
@@ -109,61 +109,58 @@ public class DHCPServer {
                 System.out.println("Подключение от " + clientSocket.getInetAddress() + ":" + clientSocket.getPort());
 
                 InputStream inputStream = clientSocket.getInputStream();  // Получаем входной поток от клиента
-                int bytesRead;
+                int bytesRead;  // Переменная для хранения количества прочитанных байт
 
                 // Бесконечный цикл чтения пакетов от клиента
                 while (true) {
-                    // Читаем MAC адрес
-                    byte[] destMacBuffer = new byte[MAC_SIZE];  // Создаем буфер для MAC адреса назначения
+                    // Читаем MAC-адрес назначения (первое поле пакета)
+                    byte[] destMacBuffer = new byte[MAC_SIZE];  // Создаем буфер для MAC-адреса назначения
                     bytesRead = inputStream.read(destMacBuffer);  // Читаем байты в буфер
                     if (bytesRead != MAC_SIZE) {  // Проверяем, что прочитано нужное количество байт
                         if (bytesRead == -1) break;
                         continue;
                     }
 
-                    // Читаем MAC адрес отправителя
+
                     byte[] srcMacBuffer = new byte[MAC_SIZE];
                     bytesRead = inputStream.read(srcMacBuffer);
                     if (bytesRead != MAC_SIZE) continue;
 
-                    // тип запроса
                     byte[] reqTypeBuffer = new byte[REQUEST_TYPE_SIZE];
                     bytesRead = inputStream.read(reqTypeBuffer);
                     if (bytesRead != REQUEST_TYPE_SIZE) continue;
 
-                    // IP адрес назначения
                     byte[] destIpBuffer = new byte[IP_SIZE];
                     bytesRead = inputStream.read(destIpBuffer);
                     if (bytesRead != IP_SIZE) continue;
 
-                    // IP адрес отправителя
+
                     byte[] srcIpBuffer = new byte[IP_SIZE];
                     bytesRead = inputStream.read(srcIpBuffer);
                     if (bytesRead != IP_SIZE) continue;
 
-                    // Читаем длину данных
+
                     byte[] dataLengthBuffer = new byte[4];
                     bytesRead = inputStream.read(dataLengthBuffer);
                     if (bytesRead != 4) continue;
 
-                    // Преобразуем байты длины данных в целое число
-                    int dataLength = byteArrayToInt(dataLengthBuffer);  // Преобразуем массив байт в int
-                    if (dataLength > MAX_DATA_SIZE || dataLength < 0) {  // Проверяем, что длина данных в допустимых пределах
-                        dataLength = MAX_DATA_SIZE;  // Если длина превышает максимум, ограничиваем ее
+                    int dataLength = byteArrayToInt(dataLengthBuffer);
+                    if (dataLength > MAX_DATA_SIZE || dataLength < 0) {
+                        dataLength = MAX_DATA_SIZE;
                     }
 
-                    // Читаем сами данные
                     byte[] dataBuffer = new byte[dataLength];
-                    bytesRead = inputStream.read(dataBuffer);  // Читаем байты в буфер
+                    bytesRead = inputStream.read(dataBuffer);
                     if (bytesRead != dataLength) continue;
 
-                    // Преобразуем все в строки
+
                     String destinationMAC = new String(destMacBuffer).trim();
                     String sourceMAC = new String(srcMacBuffer).trim();
-                    byte requestType = reqTypeBuffer[0];  // Извлекаем байт типа запроса
+                    byte requestType = reqTypeBuffer[0];
                     String destinationIP = new String(destIpBuffer).trim();
                     String sourceIP = new String(srcIpBuffer).trim();
                     String data = new String(dataBuffer).trim();
+
 
                     System.out.println("Получен пакет: MAC получателя=" + destinationMAC +
                             ", MAC отправителя=" + sourceMAC +
@@ -172,21 +169,22 @@ public class DHCPServer {
                             ", IP отправителя=" + sourceIP +
                             ", Данные=" + data);
 
+
                     processPacket(requestType, sourceMAC, data, clientSocket);
                 }
 
             } catch (IOException e) {
-                System.out.println("Соединение закрыто: " + e.getMessage());  // Выводим информацию о закрытии соединения
+                System.out.println("Соединение закрыто: " + e.getMessage());
             }
         }
     }
 
     /**
      * Обрабатывает пакет в зависимости от его типа.
-     * DISCOVER и REQUEST.
+     * Поддерживает основные типы DHCP-запросов: DISCOVER и REQUEST.
      *
      * @param requestType  Тип запроса
-     * @param sourceMAC    MAC адрес отправителя
+     * @param sourceMAC    MAC-адрес отправителя
      * @param data         Данные пакета
      * @param clientSocket Сокет клиента-отправителя
      */
@@ -197,13 +195,13 @@ public class DHCPServer {
             Socket clientSocket
     ) {
         switch(requestType) {
-            case DHCP_DISCOVER:    // Если это запрос на поиск DHCP сервера клиент ищет IP
-                processDhcpDiscover(sourceMAC, clientSocket);
+            case DHCP_DISCOVER:    // Если это запрос на поиск DHCP-сервера (клиент ищет IP)
+                processDhcpDiscover(sourceMAC, clientSocket);  // Обрабатываем DHCP DISCOVER
                 break;
-            case DHCP_REQUEST:     // Если это запрос на конкретный IP адрес
-                processDhcpRequest(sourceMAC, data, clientSocket);
+            case DHCP_REQUEST:     // Если это запрос на конкретный IP-адрес
+                processDhcpRequest(sourceMAC, data, clientSocket);  // Обрабатываем DHCP REQUEST
                 break;
-            default:               // Для всех остальных типов пакетов
+            default:
                 System.out.println("Получен неизвестный тип пакета: " + requestType);
                 break;
         }
@@ -211,25 +209,27 @@ public class DHCPServer {
 
     /**
      * Обрабатывает DHCP DISCOVER запрос от клиента.
-     * Отправляет клиенту список доступных IP адресов и предлагает один из них.
-     * Если у клиента уже есть аренда, предлагает тот же IP адрес.
+     * Отправляет клиенту список доступных IP-адресов и предлагает один из них.
+     * Если у клиента уже есть аренда, предлагает тот же IP-адрес.
+     *
+     * @param clientMAC    MAC-адрес клиента
+     * @param clientSocket Сокет клиента
      */
     private static void processDhcpDiscover(String clientMAC, Socket clientSocket) {
-        System.out.println("DHCP Discover от " + clientMAC);
+        System.out.println("DHCP Discover от " + clientMAC);  // Выводим информацию о запросе
 
-        // Проверяем, есть ли уже аренда IP адреса для этого MAC адреса
+        // Проверяем, есть ли уже аренда IP-адреса для этого MAC-адреса
         String assignedIP = dhcpLeases.get(clientMAC);  // Получаем ранее выданный IP
 
-        // Собираем список доступных IP адресов
-        List<String> availableIPs = getAvailableIPs(5);
+        List<String> availableIPs = getAvailableIPs(5);  // Получаем до 5 свободных IP-адресов
 
-        // Проверяем, есть ли свободные IP адреса в пуле
+        // Проверяем, есть ли свободные IP-адреса в пуле
         if (availableIPs.isEmpty()) {
             System.out.println("Нет свободных IP-адресов!");
             return;
         }
 
-        // Формируем строку со списком доступных адресов
+        // Формируем строку со списком доступных IP-адресов для отправки клиенту
         StringBuilder ipListStr = new StringBuilder();
         for (String ip : availableIPs) {
             ipListStr.append(ip).append(",");
@@ -237,48 +237,51 @@ public class DHCPServer {
 
         // Удаляем последнюю запятую, если список не пуст
         if (ipListStr.length() > 0) {
-            ipListStr.deleteCharAt(ipListStr.length() - 1);  // Удаляем последнюю запятую
+            ipListStr.deleteCharAt(ipListStr.length() - 1);
         }
 
+        // Выводим информацию об отправке списка доступных IP-адресов
         System.out.println("Отправка DHCP_AVAILABLE_IPS с доступными IP: " + ipListStr.toString());
 
-        // Отправляем клиенту список доступных IP адресов
+        // Отправляем клиенту список доступных IP-адресов (широковещательный адрес в качестве получателя)
         sendPacket(clientSocket, clientMAC, SERVER_MAC, DHCP_AVAILABLE_IPS,
                 "255.255.255.255", SERVER_IP, ipListStr.toString());
 
-        // Проверяем, есть ли у клиента уже выданный IP адрес
-        if (assignedIP != null) {  // Если у клиента уже есть аренда
-            // Выводим информацию о повторном предложении
+        // Проверяем, есть ли у клиента уже выданный IP-адрес
+        if (assignedIP != null) {
             System.out.println("Клиент " + clientMAC + " уже имеет аренду IP " + assignedIP);
 
-            // Отправляем DHCP OFFER с ранее выданным IP адресом
+            // Отправляем DHCP OFFER с ранее выданным IP-адресом
             sendPacket(clientSocket, clientMAC, SERVER_MAC, DHCP_OFFER,
                     assignedIP, SERVER_IP, assignedIP);
-        } else {  // Если у клиента нет аренды
-            // Предлагаем первый свободный IP адрес из списка
+        } else {
+            // Предлагаем первый свободный IP-адрес из списка
             String firstIP = availableIPs.get(0);
 
             System.out.println("Отправка DHCP Offer с IP " + firstIP + " для " + clientMAC);
 
-            // Отправляем DHCP OFFER с новым IP адресом
+            // Отправляем DHCP OFFER с новым IP-адресом
             sendPacket(clientSocket, clientMAC, SERVER_MAC, DHCP_OFFER,
                     firstIP, SERVER_IP, firstIP);
         }
     }
 
     /**
-     * Получает список доступных IP адресов из пула.
+     * Получает список доступных IP-адресов из пула.
+     *
+     * @param limit Максимальное количество IP-адресов для возврата
+     * @return Список доступных IP-адресов (не более limit)
      */
     private static List<String> getAvailableIPs(int limit) {
         List<String> availableIPs = new ArrayList<>();  // Создаем список для хранения доступных IP
-        int count = 0;  // Счетчик найденных свободных
+        int count = 0;  // Счетчик найденных свободных IP
 
         synchronized (ipPool) {
-            // Проходим по всему диапазону
+            // Проходим по всему диапазону IP-адресов
             for (int i = IP_POOL_START; i <= IP_POOL_END && count < limit; i++) {
-                if (!ipPool[i]) {  // Если адрес свободен (значение false)
+                if (!ipPool[i]) {  // Если IP-адрес свободен (значение false)
                     availableIPs.add("192.168.1." + i);  // Формируем полный IP и добавляем в список
-                    count++;  // Увеличиваем счетчик найденных
+                    count++;  // Увеличиваем счетчик найденных IP
                 }
             }
         }
@@ -288,20 +291,20 @@ public class DHCPServer {
 
     /**
      * Обрабатывает DHCP REQUEST запрос от клиента.
-     * Проверяет доступность запрошенного IP адреса и выделяет его клиенту.
+     * Проверяет доступность запрошенного IP-адреса и выделяет его клиенту.
      *
      * @param clientMAC    MAC-адрес клиента
      * @param requestedIP  Запрошенный IP-адрес
      * @param clientSocket Сокет клиента
      */
     private static void processDhcpRequest(String clientMAC, String requestedIP, Socket clientSocket) {
-
+        // Выводим информацию о запросе
         System.out.println("DHCP Request от " + clientMAC + " для IP " + requestedIP);
 
         // Проверяем, совпадает ли запрошенный IP с ранее выданным этому клиенту
         String assignedIP = dhcpLeases.get(clientMAC);  // Получаем ранее выданный IP
 
-        // Если IP уже был выдан этому клиенту, просто подтверждаем
+        // Если IP уже был выдан этому клиенту, просто подтверждаем аренду
         if (assignedIP != null && assignedIP.equals(requestedIP)) {
             System.out.println("Отправка DHCP ACK для существующей аренды " + assignedIP);
 
@@ -311,7 +314,7 @@ public class DHCPServer {
             return;
         }
 
-        // Проверяем корректность
+        // Проверяем корректность запрошенного IP-адреса
         String[] parts = requestedIP.split("\\.");  // Разбиваем IP на октеты
         if (parts.length != 4) {  // Должно быть 4 октета
             // Отправляем сообщение об ошибке при неверном формате IP
@@ -321,7 +324,7 @@ public class DHCPServer {
         }
 
         try {
-            // Извлекаем последний октет IP адреса и проверяем, входит ли он в допустимый диапазон
+            // Извлекаем последний октет IP-адреса и проверяем, входит ли он в допустимый диапазон
             int lastOctet = Integer.parseInt(parts[3]);  // Парсим последний октет
             if (lastOctet < IP_POOL_START || lastOctet > IP_POOL_END) {  // Проверяем диапазон
                 // Отправляем сообщение об ошибке при IP вне допустимого диапазона
@@ -331,7 +334,7 @@ public class DHCPServer {
             }
 
             synchronized (ipPool) {
-                // Проверяем, не занят ли запрошенный IP адрес другим клиентом
+                // Проверяем, не занят ли запрошенный IP-адрес другим клиентом
                 if (ipPool[lastOctet]) {  // Если IP уже занят
                     // Проверяем, не выдан ли этот IP другому клиенту
                     boolean isAssignedToOther = false;
@@ -344,11 +347,11 @@ public class DHCPServer {
                         }
                     }
 
-                    // Если IP выдан другому клиенту
+                    // Если IP выдан другому клиенту, отправляем сообщение об ошибке
                     if (isAssignedToOther) {
                         sendPacket(clientSocket, clientMAC, SERVER_MAC, ERROR,
                                 "0.0.0.0", SERVER_IP, "IP уже выдан другому клиенту");
-                        return;
+                        return;  // Завершаем обработку запроса
                     }
                 }
 
@@ -368,7 +371,6 @@ public class DHCPServer {
                     }
                 }
 
-                // Выделяем запрошенный IP клиенту
                 ipPool[lastOctet] = true;  // Помечаем IP как занятый
                 dhcpLeases.put(clientMAC, requestedIP);  // Добавляем или обновляем запись в таблице аренд
 
@@ -378,24 +380,25 @@ public class DHCPServer {
                         requestedIP, SERVER_IP, requestedIP);
             }
         } catch (NumberFormatException e) {  // Если возникла ошибка при парсинге IP
+            // Отправляем сообщение об ошибке
             sendPacket(clientSocket, clientMAC, SERVER_MAC, ERROR,
                     "0.0.0.0", SERVER_IP, "Неверный формат IP");
         }
     }
 
     /**
-     * Находит и возвращает свободный IP адрес из пула.
+     * Находит и возвращает свободный IP-адрес из пула.
      * При успешном нахождении помечает этот IP как занятый.
      *
      * @return Свободный IP-адрес или null, если все адреса заняты
      */
     private static String getFreeIP() {
         synchronized (ipPool) {
-            // Проходим по всему диапазону
+            // Проходим по всему диапазону IP-адресов
             for (int i = IP_POOL_START; i <= IP_POOL_END; i++) {
-                if (!ipPool[i]) {  // Если IP адрес свободен (значение false)
+                if (!ipPool[i]) {  // Если IP-адрес свободен (значение false)
                     ipPool[i] = true;  // Помечаем IP как занятый
-                    return "192.168.1." + i;  // Формируем и возвращаем полный IP адрес
+                    return "192.168.1." + i;  // Формируем и возвращаем полный IP-адрес
                 }
             }
         }
@@ -403,29 +406,28 @@ public class DHCPServer {
     }
 
     /**
-     * Преобразует массив из 4 байт в целое число
+     * Преобразует массив из 4 байт в целое число (int).
      *
      * @param bytes Массив из 4 байт
      * @return Целое число, представленное этими байтами
      */
     private static int byteArrayToInt(byte[] bytes) {
-        // Преобразуем 4 байта в int, учитывая порядок байт
-        return ((bytes[0] & 0xFF) << 24) |  // Первый байт сдвигаем на 24 бита - старший байт
-                ((bytes[1] & 0xFF) << 16) |  // Второй байт сдвигаем на 16 бит
-                ((bytes[2] & 0xFF) << 8) |   // Третий байт сдвигаем на 8 бит
-                (bytes[3] & 0xFF);           // Четвертый байт - младший байт
+
+        return ((bytes[0] & 0xFF) << 24) |
+                ((bytes[1] & 0xFF) << 16) |
+                ((bytes[2] & 0xFF) << 8) |
+                (bytes[3] & 0xFF);
     }
 
     /**
-     * Преобразует целое число в массив из 4 байт.
+     * Преобразует целое число (int) в массив из 4 байт.
      *
      * @param value Целое число
      * @return Массив из 4 байт, представляющий это число
      */
     private static byte[] intToByteArray(int value) {
-        // Преобразуем int в массив из 4 байт
         return new byte[] {
-                (byte)(value >>> 24),        // сдвиг на 24 бита вправо
+                (byte)(value >>> 24),
                 (byte)(value >>> 16),
                 (byte)(value >>> 8),
                 (byte)value
@@ -436,11 +438,11 @@ public class DHCPServer {
      * Формирует и отправляет пакет через указанный сокет.
      *
      * @param socket         Сокет, через который отправляется пакет
-     * @param destinationMAC MAC адрес получателя
-     * @param sourceMAC      MAC адрес отправителя
+     * @param destinationMAC MAC-адрес получателя
+     * @param sourceMAC      MAC-адрес отправителя
      * @param requestType    Тип запроса
-     * @param destinationIP  IP адрес получателя
-     * @param sourceIP       IP адрес отправителя
+     * @param destinationIP  IP-адрес получателя
+     * @param sourceIP       IP-адрес отправителя
      * @param data           Данные пакета
      */
     private static void sendPacket(
@@ -468,16 +470,15 @@ public class DHCPServer {
             byte[] srcIPBytes = padRight(sourceIP, IP_SIZE).getBytes();
             byte[] dataBytes = data.getBytes();
 
-            // Ограничиваем размер данных, если он превышает максимально допустимый
             if (dataBytes.length > MAX_DATA_SIZE) {
                 byte[] truncatedData = new byte[MAX_DATA_SIZE];
-                System.arraycopy(dataBytes, 0, truncatedData, 0, MAX_DATA_SIZE);
-                dataBytes = truncatedData;
+                System.arraycopy(dataBytes, 0, truncatedData, 0, MAX_DATA_SIZE);   // Копируем только часть данных
+                dataBytes = truncatedData;                                         // Используем усеченные данные
             }
 
             byte[] dataLengthBytes = intToByteArray(dataBytes.length);  // Преобразуем длину данных в байты
 
-            // Записываем все поля  в выходной поток
+            // Записываем все поля последовательно в выходной поток
             outputStream.write(destMACBytes);
             outputStream.write(srcMACBytes);
             outputStream.write(reqTypeBytes);
@@ -487,6 +488,7 @@ public class DHCPServer {
             outputStream.write(dataBytes);
             outputStream.flush();
 
+            // Преобразуем тип запроса
             String requestTypeStr;
             switch (requestType) {
                 case DHCP_DISCOVER: requestTypeStr = "DHCP_DISCOVER"; break;
@@ -515,9 +517,11 @@ public class DHCPServer {
      * @return Строка нужной длины, дополненная пробелами справа
      */
     private static String padRight(String s, int n) {
+        // Если строка длиннее или равна нужной длине, обрезаем ее
         if (s.length() >= n) {
-            return s.substring(0, n);
+            return s.substring(0, n);  // Возвращаем только первые n символов
         }
-        return String.format("%-" + n + "s", s);  // Используем  для выравнивания по левому краю
+        // Форматируем строку, добавляя пробелы справа
+        return String.format("%-" + n + "s", s);  // Используем форматирование для выравнивания по левому краю
     }
 }
