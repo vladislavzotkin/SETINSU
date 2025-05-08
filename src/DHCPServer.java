@@ -1,11 +1,11 @@
-import java.io.*;               // Импорт классов ввода-вывода для работы с потоками данных
-import java.net.*;              // Импорт сетевых классов для работы с сокетами и сетевыми соединениями
-import java.util.Collections;   // Импорт утилитарного класса для создания безопасных коллекций
-import java.util.HashMap;       // Импорт класса для хранения пар ключ-значение
-import java.util.Map;           // Импорт интерфейса для работы с отображениями
-import java.util.Scanner;       // Импорт класса для чтения пользовательского ввода
-import java.util.ArrayList;     // Импорт класса для работы с динамическими массивами
-import java.util.List;          // Импорт интерфейса для работы со списками
+import java.io.*;              
+import java.net.*;              
+import java.util.Collections;   
+import java.util.HashMap;       
+import java.util.Map;          
+import java.util.Scanner;      
+import java.util.ArrayList;     
+import java.util.List;          
 
 
 public class DHCPServer {
